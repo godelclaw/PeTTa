@@ -22,6 +22,13 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
                            ; Atom = [Rel|Args] -> Term =.. [Space, Rel | Args], retractall(Term)
                            ; must_be(atom, Space), retractall(space_primitive(Space, Atom)) ).
 
+%Arrow declarations alter the code emitted for stored functions.
+'add-atom'(Space, Term, true) :- Space == '&self',
+                                 function_type_annotation_term(Term, F, TypeChain), !,
+                                 ( predeclared_function_type_variant(F, TypeChain)
+                                   -> add_sexp(Space, Term)
+                                   ;  revise_function_type(F, add_sexp(Space, Term)) ).
+
 %Add a function atom:
 'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
                                  add_sexp(Space, Term),
@@ -40,6 +47,12 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
 
 %%A removal with an unknown function name must not erase program rows:
 'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
+'remove-atom'(Space, Term, true) :- Space == '&self',
+                                    function_type_annotation_term(Term, F, TypeChain), !,
+                                    revise_function_type(
+                                        F,
+                                        ( retractall(predeclared_function_type(F, TypeChain)),
+                                          remove_sexp(Space, Term) )).
 
 %%Remove a function atom:
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|_],_], atom(F), !,
