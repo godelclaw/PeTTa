@@ -7,7 +7,7 @@ constrain_args([F, A, B], Out, Goals) :- nonvar(F),
                                          Out = [A1|B1],
                                          append(G1, G2, Goals), !.
 constrain_args([F|Args], Var, Goals) :- atom(F),
-                                        fun(F), !,
+                                        callable_fun(F, _), !,
                                         translate_expr([F|Args], GoalsExpr, Var),
                                         flatten(GoalsExpr, Goals).
 constrain_args(In, Out, Goals) :- maplist(constrain_args, In, Out, NestedGoalsList),
@@ -17,6 +17,8 @@ constrain_args(In, Out, Goals) :- maplist(constrain_args, In, Out, NestedGoalsLi
 translate_clause(Input, (Head :- BodyConj)) :- translate_clause(Input, (Head :- BodyConj), true).
 translate_clause(Input, (Head :- BodyConj), ConstrainArgs) :-
                                                Input = [=, [F|Args0], BodyExpr],
+                                               current_translation_space(Space),
+                                               space_pred(Space, F, Pred),
                                                ( ConstrainArgs -> maplist(constrain_args, Args0, Args1, GoalsA),
                                                                   flatten(GoalsA,GoalsPrefix)
                                                                 ; Args1 = Args0, GoalsPrefix = [] ),
@@ -31,9 +33,9 @@ translate_clause(Input, (Head :- BodyConj), ConstrainArgs) :-
                                                   append(GoalsBody,[Goal],FinalGoals), append(Args1,ExtraArgs,HeadArgs)
                                                ; FinalGoals= GoalsBody , HeadArgs = Args1, Out = ExpOut ),
                                                append(HeadArgs, [Out], FinalArgs),
-                                               Head =.. [F|FinalArgs],
+                                               Head =.. [Pred|FinalArgs],
                                                length(FinalArgs, CompiledArity),
-                                               (arity(F, CompiledArity) -> true ; assertz(arity(F, CompiledArity))),
+                                               (arity(Pred, CompiledArity) -> true ; assertz(arity(Pred, CompiledArity))),
                                                append(GoalsPrefix, FinalGoals, Goals),
                                                goals_list_to_conj(Goals, BodyConj).
 
@@ -41,37 +43,117 @@ translate_clause(Input, (Head :- BodyConj), ConstrainArgs) :-
 :- dynamic symbol_head/1.
 note_symbol_head(HV) :- atom(HV), \+ symbol_head(HV), !, assertz(symbol_head(HV)).
 note_symbol_head(_).
+%%% Executable space ownership %%%
+
+:- dynamic space_fun/3.
+:- dynamic translated_from/3.
+
+% Existing compiler clients operate on the default program only.
+translated_from(Ref, Term) :- translated_from(Ref, '&self', Term).
+
+current_translation_space(Space) :-
+    ( nb_current('$translation_space', Current) -> Space = Current
+    ; Space = '&self' ).
+
+with_translation_space(Space, Goal) :-
+    current_translation_space(Previous),
+    ( Previous == Space -> call(Goal)
+    ; setup_call_cleanup(nb_setval('$translation_space', Space),
+                         Goal,
+                         nb_setval('$translation_space', Previous)) ).
+
+translate_expr_in_space(Space, Input, Goals, Out) :-
+    with_translation_space(Space, translate_expr(Input, Goals, Out)).
+
+space_pred('&self', F, F) :- !.
+space_pred(Space, F, Pred) :-
+    atom_length(Space, SpaceLength),
+    atom_length(F, FunctionLength),
+    atomic_list_concat(['$petta_space$', SpaceLength, '$', Space,
+                        '$', FunctionLength, '$', F], Pred).
+
+register_space_fun(Space, F, Pred) :-
+    space_pred(Space, F, Pred),
+    ( space_fun(Space, F, Pred) -> true
+    ; assertz(space_fun(Space, F, Pred)) ),
+    register_fun(Pred).
+
+space_call_target(Space, F, Pred) :-
+    ( space_fun(Space, F, Owned) -> Pred = Owned
+    ; Space == '&self' -> fun(F), Pred = F
+    ; fun(F), \+ space_fun('&self', F, _) -> Pred = F
+    ).
+
+callable_fun(F, Pred) :-
+    current_translation_space(Space),
+    space_call_target(Space, F, Pred).
+
+reduce_goal(Term, Out, Goal) :-
+    current_translation_space(Space),
+    ( Space == '&self' -> Goal = reduce(Term, Out)
+    ; Goal = space_reduce(Space, Term, Out) ).
+
+type_guard_goal(Value, Type, Guard) :-
+    current_translation_space(Space),
+    ( Space == '&self'
+      -> Guard = ('get-type'(Value, Type) *-> true ; 'get-metatype'(Value, Type))
+    ; Guard = ('space-get-type'(Space, Value, Type) *-> true ; 'get-metatype'(Value, Type)) ).
+
+pred_type_chains(Pred, TypeChains) :-
+    ( space_fun(Space, F, Pred) -> function_type_chains(Space, F, TypeChains)
+    ; function_type_chains(Pred, TypeChains) ).
+
+install_function_clause(Space, Term, Ref) :-
+    with_translation_space(Space, once(translate_clause(Term, Clause))),
+    assertz(Clause, Ref),
+    assertz(translated_from(Ref, Space, Term)).
+
+uninstall_function_clauses(Space, Term, Refs) :-
+    findall(Ref, translated_from(Ref, Space, Term), Refs),
+    forall(member(Ref, Refs), erase(Ref)),
+    retractall(translated_from(_, Space, Term)).
+
+forget_function_provenance(Pred) :-
+    findall(Ref,
+            ( translated_from(Ref, Space, [=, [F|_], _]),
+              space_pred(Space, F, Pred) ),
+            Refs),
+    forall(member(Ref, Refs), retractall(translated_from(Ref, _, _))).
+
 %%% Coherent function-type revisions %%%
 
-:- dynamic translated_from/2.
-:- thread_local predeclared_function_type/2.
+:- thread_local predeclared_function_type/3.
 
 function_type_annotation_term([':', F, TypeChain], F, TypeChain) :-
     atom(F),
     TypeChain = ['->'|Types],
     Types \= [].
 
-with_predeclared_function_types(Types, Goal) :-
+with_predeclared_function_types(Space, Types, Goal) :-
     setup_call_cleanup(
-        maplist(assert_predeclared_function_type, Types, Refs),
+        maplist(assert_predeclared_function_type(Space), Types, Refs),
         Goal,
         maplist(erase_predeclared_function_type, Refs)).
 
-assert_predeclared_function_type(F-TypeChain, Ref) :-
-    assertz(predeclared_function_type(F, TypeChain), Ref).
+assert_predeclared_function_type(Space, F-TypeChain, Ref) :-
+    assertz(predeclared_function_type(Space, F, TypeChain), Ref).
 
 erase_predeclared_function_type(Ref) :- catch(erase(Ref), _, true).
 
-predeclared_function_type_variant(F, TypeChain) :-
-    predeclared_function_type(F, Existing),
+predeclared_function_type_variant(Space, F, TypeChain) :-
+    predeclared_function_type(Space, F, Existing),
     TypeChain =@= Existing, !.
 
 function_type_chains(F, TypeChains) :-
+    current_translation_space(Space),
+    function_type_chains(Space, F, TypeChains).
+
+function_type_chains(Space, F, TypeChains) :-
     findall(TypeChain,
-            catch(match('&self', [':', F, TypeChain], TypeChain, TypeChain),
+            catch(match(Space, [':', F, TypeChain], TypeChain, TypeChain),
                   _, fail),
             Live),
-    findall(TypeChain, predeclared_function_type(F, TypeChain), Predeclared),
+    findall(TypeChain, predeclared_function_type(Space, F, TypeChain), Predeclared),
     append(Live, Predeclared, All),
     variant_unique(All, TypeChains).
 
@@ -91,9 +173,9 @@ member_variant(Item, [_|Seen]) :- member_variant(Item, Seen).
 existing_specialization(Source, Target) :-
     current_predicate(ho_specialization/2), ho_specialization(Source, Target).
 
-function_source_clauses(F, Clauses) :-
+function_source_clauses(Space, F, Clauses) :-
     findall(Ref-Term,
-            ( translated_from(Ref, Term),
+            ( translated_from(Ref, Space, Term),
               clause(_, _, Ref),
               Term = [=, [SourceF|_], _],
               SourceF == F,
@@ -109,9 +191,9 @@ source_mentions_atom(Term, Atom) :-
     member(Part, Term),
     source_mentions_atom(Part, Atom).
 
-direct_source_dependents(Callee, Functions) :-
+direct_source_dependents(Space, Callee, Functions) :-
     findall(F,
-            ( translated_from(Ref, Term),
+            ( translated_from(Ref, Space, Term),
               clause(_, _, Ref),
               Term = [=, [F|_], _],
               atom(F),
@@ -120,19 +202,19 @@ direct_source_dependents(Callee, Functions) :-
             Functions0),
     sort(Functions0, Functions).
 
-source_dependent_closure(Callee, Functions) :-
-    source_dependent_closure([Callee], [], [], Functions0),
+source_dependent_closure(Space, Callee, Functions) :-
+    source_dependent_closure(Space, [Callee], [], [], Functions0),
     sort(Functions0, Functions).
 
-source_dependent_closure([], _, Functions, Functions).
-source_dependent_closure([Current|Pending], Seen, Acc, Functions) :-
+source_dependent_closure(_, [], _, Functions, Functions).
+source_dependent_closure(Space, [Current|Pending], Seen, Acc, Functions) :-
     memberchk(Current, Seen), !,
-    source_dependent_closure(Pending, Seen, Acc, Functions).
-source_dependent_closure([Current|Pending], Seen, Acc, Functions) :-
-    direct_source_dependents(Current, Direct),
+    source_dependent_closure(Space, Pending, Seen, Acc, Functions).
+source_dependent_closure(Space, [Current|Pending], Seen, Acc, Functions) :-
+    direct_source_dependents(Space, Current, Direct),
     append(Pending, Direct, Next),
     append(Direct, Acc, NextAcc),
-    source_dependent_closure(Next, [Current|Seen], NextAcc, Functions).
+    source_dependent_closure(Space, Next, [Current|Seen], NextAcc, Functions).
 
 function_metadata(F, present(Metadata)) :-
     catch(nb_getval(F, Metadata), _, fail), !.
@@ -153,38 +235,40 @@ restore_function_metadata_snapshot([F-State|States]) :-
     restore_function_metadata(F, State),
     restore_function_metadata_snapshot(States).
 
-type_revision_plan(Callee, Plan, MetadataSnapshot) :-
-    source_dependent_closure(Callee, Functions),
-    maplist(function_recompile_entry, Functions, Plan),
+type_revision_plan(Space, Callee, Plan, MetadataSnapshot) :-
+    source_dependent_closure(Space, Callee, Functions),
+    maplist(function_recompile_entry(Space), Functions, Plan),
     ( Plan == []
       -> MetadataSnapshot = []
-      ;  findall(Specialization, existing_specialization(_, Specialization), Specs0),
-         append(Functions, Specs0, Symbols0),
+      ;  maplist(space_pred(Space), Functions, Predicates),
+         ( Space == '&self'
+           -> findall(Specialization, existing_specialization(_, Specialization), Specs)
+           ; Specs = [] ),
+         append(Predicates, Specs, Symbols0),
          sort(Symbols0, Symbols),
          snapshot_function_metadata(Symbols, MetadataSnapshot) ).
 
-function_recompile_entry(F, function(F, Clauses)) :-
-    function_source_clauses(F, Clauses).
+function_recompile_entry(Space, F, function(Space, F, Pred, Clauses)) :-
+    space_pred(Space, F, Pred),
+    function_source_clauses(Space, F, Clauses).
 
 erase_compiled_clauses([]).
 erase_compiled_clauses([Ref-_|Clauses]) :-
     erase(Ref),
-    retractall(translated_from(Ref, _)),
+    retractall(translated_from(Ref, _, _)),
     erase_compiled_clauses(Clauses).
 
 compile_source_clauses([], _).
-compile_source_clauses([_-Term|Clauses], F) :-
+compile_source_clauses([_-Term|Clauses], Space) :-
     copy_term(Term, Fresh),
-    once(translate_clause(Fresh, Clause)),
-    assertz(Clause, Ref),
-    assertz(translated_from(Ref, Fresh)),
-    compile_source_clauses(Clauses, F).
+    install_function_clause(Space, Fresh, _),
+    compile_source_clauses(Clauses, Space).
 
-recompile_function(function(F, Clauses)) :-
+recompile_function(function(Space, _F, Pred, Clauses)) :-
     erase_compiled_clauses(Clauses),
-    (current_predicate(ho_specialization/2) -> nb_setval(F, []) ; true),
-    compile_source_clauses(Clauses, F),
-    metta_on_function_changed(F).
+    (current_predicate(ho_specialization/2) -> nb_setval(Pred, []) ; true),
+    compile_source_clauses(Clauses, Space),
+    metta_on_function_changed(Pred).
 
 specialization_stack(Stack) :-
     catch(nb_getval('$spec_stack', Stack), _, Stack = []).
@@ -204,11 +288,11 @@ invalidate_all_specializations :-
     sort(Functions0, Functions),
     forall(member(F, Functions), invalidate_specializations(F)).
 
-apply_type_revision([]).
-apply_type_revision(Plan) :-
+apply_type_revision(_, []).
+apply_type_revision(Space, Plan) :-
     Plan \= [],
     with_specialization_suppressed(
-        ( invalidate_all_specializations,
+        ( ( Space == '&self' -> invalidate_all_specializations ; true ),
           maplist(recompile_function, Plan) )).
 
 restore_type_revision_state(state(snapshot(MetadataSnapshot))) :- !,
@@ -217,18 +301,18 @@ restore_type_revision_state(_).
 
 % Type mutation and dependent recompilation are one database transaction.
 % Non-backtrackable compiler metadata is restored explicitly on failure.
-revise_function_type(F, Mutation) :-
+revise_function_type(Space, F, Mutation) :-
     with_mutex(petta_type_revision,
         ( State = state(none),
           catch(
               ( transaction(
-                    ( function_type_chains(F, Before),
+                    ( function_type_chains(Space, F, Before),
                       call(Mutation),
-                      function_type_chains(F, After),
+                      function_type_chains(Space, F, After),
                       ( Before =@= After -> true
-                      ; type_revision_plan(F, Plan, MetadataSnapshot),
+                      ; type_revision_plan(Space, F, Plan, MetadataSnapshot),
                         nb_setarg(1, State, snapshot(MetadataSnapshot)),
-                        apply_type_revision(Plan) ) ))
+                        apply_type_revision(Space, Plan) ) ))
                 -> true
                 ;  restore_type_revision_state(State), fail ),
               Error,
@@ -281,8 +365,27 @@ reduce([F|Args], Out) :- nonvar(F), atom(F), fun(F)
                             Out = [F|Args],
                             \+ cyclic_term(Out).
 
+% Named-space dynamic dispatch receives its owner as a compiled constant.
+space_reduce(Space, [F|Args], Out) :-
+        nonvar(F), atom(F), space_call_target(Space, F, Pred)
+        -> length(Args, N),
+           Arity is N + 1,
+           ( current_predicate(Pred/Arity), \+ (current_op(_, _, Pred), Arity =< 2)
+             -> resolve_memoization(Pred, Args, Out, Goal),
+                catch(call(Goal), _, fail)
+           ; incomplete_application_kind(Pred, Arity, partial)
+             -> Out = partial(Pred, Args)
+           ; throw_function_overapplication(Pred, N) )
+         ; compound(F), F = partial(Base, Bound)
+           -> append(Bound, Args, NewArgs),
+              space_reduce(Space, [Base|NewArgs], Out)
+         ; Out = [F|Args],
+           \+ cyclic_term(Out).
+
 %Calling reduce from aggregate function foldall needs this argument wrapping
 agg_reduce(AF, Acc, Val, NewAcc) :- reduce([AF, Acc, Val], NewAcc).
+space_agg_reduce(Space, AF, Acc, Val, NewAcc) :-
+    space_reduce(Space, [AF, Acc, Val], NewAcc).
 
 %Combined expr translation to goals list
 translate_expr_to_conj(Input, Conj, Out) :- translate_expr(Input, Goals, Out),
@@ -350,7 +453,11 @@ translate_expr([H0|T0], Goals, Out) :-
                   append(GsH, [concurrent_and(member((Goal,Res), Branches), (call(Goal), Out = Res))], Goals)
                ; translate_expr(L, GsL, LV),
                  append(GsH, GsL, Inner),
-                 append(Inner, [hyperpose_runtime(LV, Out)], Goals) )
+                 current_translation_space(HyperposeSpace),
+                 ( HyperposeSpace == '&self'
+                   -> HyperposeGoal = hyperpose_runtime(LV, Out)
+                   ; HyperposeGoal = space_hyperpose_runtime(HyperposeSpace, LV, Out) ),
+                 append(Inner, [HyperposeGoal], Goals) )
         ; HV == with_mutex, T = [M,X] -> translate_expr_to_conj(X, Conj, Out),
                                          append(GsH, [with_mutex(M,Conj)], Goals)
         ; HV == transaction, T = [X] -> translate_expr_to_conj(X, Conj, Out),
@@ -419,9 +526,11 @@ translate_expr([H0|T0], Goals, Out) :-
              translate_expr(TF, GsTF, TFHV),
              TestList = [TFHV, V],
              goals_list_to_conj(GsGF, GPre),
-             GenGoal = (GPre, reduce(GenList, V)),
+             reduce_goal(GenList, V, GenReduce),
+             GenGoal = (GPre, GenReduce),
+             reduce_goal(TestList, Truth, TestReduce),
              append(GsH, GsTF, Tmp0),
-             append(Tmp0, [( forall(GenGoal, ( reduce(TestList, Truth), Truth == true )) -> Out = true ; Out = false )], Goals)
+             append(Tmp0, [( forall(GenGoal, ( TestReduce, Truth == true )) -> Out = true ; Out = false )], Goals)
         ; HV == 'foldall', T = [AF, GF, InitS]
           -> translate_expr_to_conj(InitS, ConjInit, Init),
              translate_expr(AF, GsAF, AFV),
@@ -437,7 +546,11 @@ translate_expr([H0|T0], Goals, Out) :-
                               GenList = [GFHV] ),
              append(GsH, GsAF, Tmp1),
              append(Tmp1, GsGF, Tmp2),
-             append(Tmp2, [ConjInit, foldall(agg_reduce(AFV, V), reduce(GenList, V), Init, Out)], Goals)
+             reduce_goal(GenList, V, FoldReduce),
+             current_translation_space(FoldSpace),
+             ( FoldSpace == '&self' -> AggGoal = agg_reduce(AFV, V)
+             ; AggGoal = space_agg_reduce(FoldSpace, AFV, V) ),
+             append(Tmp2, [ConjInit, foldall(AggGoal, FoldReduce, Init, Out)], Goals)
         %--- Higher-order functions with pseudo-lambdas and lambdas ---:
         ; HV == 'foldl-atom', T = [List, Init, AccVar, XVar, Body]
           -> translate_expr_to_conj(List, ConjList, L),
@@ -466,17 +579,18 @@ translate_expr([H0|T0], Goals, Out) :-
                                            append(FreeVars, Args, FullArgs),
                                            % compile clause with all bound + free vars
                                            translate_clause([=, [F|FullArgs], Body], Clause),
-                                           %translate_clause records arities; keep the function marker idempotent.
-                                           ( fun(F) -> true ; assertz(fun(F)) ),
+                                           current_translation_space(LambdaSpace),
+                                           space_pred(LambdaSpace, F, LambdaPred),
+                                           register_fun(LambdaPred),
                                            assertz(Clause),
-                                           format(atom(Label), "metta lambda (~w)", [F]),
+                                           format(atom(Label), "metta lambda (~w)", [LambdaPred]),
                                            maybe_print_compiled_clause(Label, ['|->', Args, Body], Clause),
                                            length(FullArgs, N),
                                            Arity is N + 1,
-                                           (arity(F, Arity) -> true ; assertz(arity(F, Arity))),
+                                           (arity(LambdaPred, Arity) -> true ; assertz(arity(LambdaPred, Arity))),
                                            % emit closure capturing the environment (free vars)
-                                           ( FreeVars == [] -> Out = F
-                                                             ; Out = partial(F, FreeVars) ),
+                                           ( FreeVars == [] -> Out = LambdaPred
+                                                             ; Out = partial(LambdaPred, FreeVars) ),
                                            Goals = GsH
         %--- Spaces ---:
         ; ( HV == 'add-atom' ; HV == 'remove-atom' ), T = [Space,Atom] ->
@@ -503,16 +617,30 @@ translate_expr([H0|T0], Goals, Out) :-
                                      append(Inner, [Goal], Goals)
         %Produce a dynamic dispatch, translating Args for nesting:
         ; HV == reduce, T = [Expr] -> ( var(Expr) -> translate_expr(Expr, GsH, ExprOut),
-                                                     Goals = [reduce(ExprOut, Out)|GsH]
+                                                     reduce_goal(ExprOut, Out, ReduceGoal),
+                                                     Goals = [ReduceGoal|GsH]
                                                    ; Expr = [F|Args],
                                                      translate_args(Args, GsArgs, ArgsOut),
                                                      append(GsH, GsArgs, Inner),
                                                      ExprOut = [F|ArgsOut],
-                                                     append(Inner, [reduce(ExprOut, Out)], Goals) )
+                                                     reduce_goal(ExprOut, Out, ReduceGoal),
+                                                     append(Inner, [ReduceGoal], Goals) )
         %Invoke translator to evaluate MeTTa code as data/list:
         ; HV == eval, T = [Arg] -> append(GsH, [], Inner),
-                                   Goal = eval(Arg, Out),
+                                   current_translation_space(EvalSpace),
+                                   ( EvalSpace == '&self' -> Goal = eval(Arg, Out)
+                                   ; Goal = eval(Arg, EvalSpace, Out) ),
                                    append(Inner, [Goal], Goals)
+        %Evaluate within an explicitly selected space:
+        ; HV == eval, T = [Arg, SpaceExpr] -> translate_expr(SpaceExpr, GsS, Space),
+                                              append(GsH, GsS, Inner),
+                                              append(Inner, [eval(Arg, Space, Out)], Goals)
+        %A named-space type query stays with its compiled owner:
+        ; HV == 'get-type', T = [Arg],
+          current_translation_space(TypeSpace), TypeSpace \== '&self'
+          -> translate_expr(Arg, GsArg, Value),
+             append(GsH, GsArg, Inner),
+             append(Inner, ['space-get-type'(TypeSpace, Value, Out)], Goals)
         %Force arg to remain data/list:
         ; HV == quote, T = [Expr] -> append(GsH, [], Inner),
                                      Out = Expr,
@@ -530,11 +658,11 @@ translate_expr([H0|T0], Goals, Out) :-
         ; translate_args(T, GsT, AVs),
           append(GsH, GsT, Inner),
           %Known function => direct call:
-          ( is_list(AVs), 
-            ( atom(HV), fun(HV), Fun = HV, AllAVs = AVs, IsPartial = false
+          ( is_list(AVs),
+            ( atom(HV), callable_fun(HV, Fun), AllAVs = AVs, IsPartial = false
             ; compound(HV), HV = partial(Fun, Bound), append(Bound,AVs,AllAVs), IsPartial = true
             ) % Check for type definition [:,HV,TypeChain]
-            -> function_type_chains(Fun, UniqueTypeChains),
+            -> pred_type_chains(Fun, UniqueTypeChains),
                ( UniqueTypeChains \= []
                  -> length(AllAVs, InputArity),
                     Arity is InputArity + 1,
@@ -546,15 +674,16 @@ translate_expr([H0|T0], Goals, Out) :-
                          Goals = [Disj] )
               ; build_call_or_partial(Fun, AllAVs, Out, Inner, [], Goals))
           %Literals (numbers, strings, etc.), known non-function atom => data:
-          ; ( atomic(HV), \+ atom(HV) ; atom(HV), \+ fun(HV) ) -> note_symbol_head(HV),
-                                                                  Out = [HV|AVs],
-                                                                  Goals = Inner
+          ; ( atomic(HV), \+ atom(HV) ; atom(HV), \+ callable_fun(HV, _) ) -> note_symbol_head(HV),
+                                                                                       Out = [HV|AVs],
+                                                                                       Goals = Inner
           %Plain data list: evaluate inner fun-sublists
           ; is_list(HV) -> eval_data_term(HV, Gd, HV1),
                            append(Inner, Gd, Goals),
                            Out = [HV1|AVs]
           %Unknown head (var/compound) => runtime dispatch:
-          ; append(Inner, [reduce([HV|AVs], Out)], Goals) )).
+          ; reduce_goal([HV|AVs], Out, ReduceGoal),
+            append(Inner, [ReduceGoal], Goals) )).
 
 %Generate actual function call or partial if arity not complete:
 build_call_or_partial(Fun, AVs, Out, Inner, Extra, Goals) :- length(AVs, N),
@@ -580,7 +709,8 @@ typed_functioncall_branch(Fun, TypeChain, T, GsH, IsPartial, Bound, Out, BranchG
     ( IsPartial -> append(Bound, AVsTmp0, AVsTmp) ; AVsTmp = AVsTmp0 ),
     append(GsH, GsT2, InnerTmp),
     ( (OutType == '%Undefined%' ; OutType == '_' ; OutType == 'Atom')
-       -> Extra = [] ; Extra = [('get-type'(Out, OutType) *-> true ; 'get-metatype'(Out, OutType))] ),
+       -> Extra = []
+       ; type_guard_goal(Out, OutType, OutGuard), Extra = [OutGuard] ),
     build_call_or_partial(Fun, AVsTmp, Out, InnerTmp, Extra, GoalsList),
     goals_list_to_conj(GoalsList, BranchGoal).
 
@@ -592,14 +722,15 @@ translate_args_by_type([A|As], [T|Ts], GsOut, [AV|AVs]) :-
                                            ; translate_expr(A, GsA1, AV),
                                              ( (T == '%Undefined%' ; T == '_')
                                                -> GsA = GsA1
-                                                ; append(GsA1, [('get-type'(AV, T) *-> true ; 'get-metatype'(AV, T))], GsA))),
+                                                ; type_guard_goal(AV, T, ArgGuard),
+                                                  append(GsA1, [ArgGuard], GsA))),
                                              translate_args_by_type(As, Ts, GsRest, AVs),
                                              append(GsA, GsRest, GsOut).
 
 %Handle data list:
 eval_data_term(X, [], X) :- (var(X); atomic(X)), !.
-eval_data_term([F|As], Goals, Val) :- ( atom(F), fun(F) -> translate_expr([F|As], Goals, Val)
-                                                         ; eval_data_list([F|As], Goals, Val) ).
+eval_data_term([F|As], Goals, Val) :- ( atom(F), callable_fun(F, _) -> translate_expr([F|As], Goals, Val)
+                                                                              ; eval_data_list([F|As], Goals, Val) ).
 
 %Handle data list entry:
 eval_data_list([], [], []).
@@ -655,6 +786,10 @@ build_hyperpose_branches([E|Es], [(Goal, Res)|Bs]) :- translate_expr_to_conj(E, 
                                                       build_hyperpose_branches(Es, Bs).
 
 %Runtime hyperpose path for variable/computed list arguments.
+space_hyperpose_runtime(Space, Exprs, Out) :- is_list(Exprs),
+                                              concurrent_and(member(Expr, Exprs),
+                                                             eval(Expr, Space, Out)).
+
 hyperpose_runtime(Exprs, Out) :- is_list(Exprs),
                                  concurrent_and(member(Expr, Exprs), eval(Expr, Out)).
 

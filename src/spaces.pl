@@ -23,46 +23,50 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
                            ; must_be(atom, Space), retractall(space_primitive(Space, Atom)) ).
 
 %Arrow declarations alter the code emitted for stored functions.
-'add-atom'(Space, Term, true) :- Space == '&self',
+'add-atom'(Space, Term, true) :- atom(Space),
                                  function_type_annotation_term(Term, F, TypeChain), !,
-                                 ( predeclared_function_type_variant(F, TypeChain)
+                                 ( predeclared_function_type_variant(Space, F, TypeChain)
                                    -> add_sexp(Space, Term)
-                                   ;  revise_function_type(F, add_sexp(Space, Term)) ).
+                                   ; revise_function_type(Space, F, add_sexp(Space, Term)) ).
 
-%Add a function atom:
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
+%Add a function atom to its owner's compiled program:
+'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(Space), atom(FAtom), !,
                                  add_sexp(Space, Term),
-                                 register_fun(FAtom),
+                                 register_space_fun(Space, FAtom, Pred),
                                  length(W, N),
                                  Arity is N + 1,
-                                 assertz(arity(FAtom,Arity)),
-                                 once(translate_clause(Term, Clause)),
-                                 assertz(Clause, Ref),
-                                 assertz(translated_from(Ref, Term)),
-                                 metta_on_function_changed(FAtom),
-                                 maybe_print_compiled_clause("added function", Term, Clause).
+                                 assertz(arity(Pred,Arity)),
+                                 install_function_clause(Space, Term, Ref),
+                                 metta_on_function_changed(Pred),
+                                 (current_predicate(invalidate_specializations/1) -> invalidate_specializations(Pred) ; true),
+                                 ( silent(true) -> true
+                                 ; clause(Head, Body, Ref),
+                                   maybe_print_compiled_clause("added function", Term, (Head :- Body)) ).
 
 %Add an atom to the space:
 'add-atom'(Space, Term, true) :- add_sexp(Space, Term).
 
 %%A removal with an unknown function name must not erase program rows:
 'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
-'remove-atom'(Space, Term, true) :- Space == '&self',
+'remove-atom'(Space, Term, true) :- atom(Space),
                                     function_type_annotation_term(Term, F, TypeChain), !,
                                     revise_function_type(
-                                        F,
-                                        ( retractall(predeclared_function_type(F, TypeChain)),
+                                        Space, F,
+                                        ( retractall(predeclared_function_type(Space, F, TypeChain)),
                                           remove_sexp(Space, Term) )).
 
 %%Remove a function atom:
-'remove-atom'(Space, Term, Removed) :- Term = [=,[F|_],_], atom(F), !,
+'remove-atom'(Space, Term, Removed) :- Term = [=,[F|_],_],
+                                       atom(Space), atom(F), !,
                                        remove_sexp(Space, Term),
-                                       findall(Ref, translated_from(Ref, Term), Refs),
-                                       forall(member(Ref, Refs), erase(Ref)),
-                                       retractall(translated_from(_, Term)),
-                                       metta_on_function_changed(F),
-                                       ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
-                                         -> retractall(fun(F)), metta_on_function_removed(F)
+                                       space_pred(Space, F, Pred),
+                                       uninstall_function_clauses(Space, Term, Refs),
+                                       metta_on_function_changed(Pred),
+                                       (current_predicate(invalidate_specializations/1) -> invalidate_specializations(Pred) ; true),
+                                       ( \+ ( current_predicate(Pred/A), functor(H2, Pred, A), clause(H2, _, _) )
+                                         -> retractall(fun(Pred)),
+                                            retractall(space_fun(Space, F, Pred)),
+                                            metta_on_function_removed(Pred)
                                          ; true ),
                                        ( Refs = [] -> Removed = false ; Removed = true ).
 
