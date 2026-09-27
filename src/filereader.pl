@@ -51,15 +51,18 @@ newlines(C0, C2) --> blanks_to_nl, !, {C1 is C0+1}, newlines(C1,C2).
 newlines(C, C) --> blanks.
 
 %Collect characters until all parentheses are balanced (depth 0), accumulating codes, and also counting newlines:
-grab_until_balanced(D, Acc, Cs, LC0, LC2, InS) --> [C], { ( C=0'" -> InS1 is 1-InS ; InS1 = InS ),
-                                                                     ( InS = 0 -> ( C=0'( -> D1 is D+1
-                                                                                           ; C=0') -> D1 is D-1
-                                                                                                    ; D1 = D )
-                                                                                ; D1 = D ),
-                                                                     Acc1=[C|Acc],
-                                                                     ( C=10 -> LC1 is LC0+1 ; LC1 = LC0 ) },
-                                                          ( { D1=:=0, InS1=0 } -> { reverse(Acc1,Cs) , LC2 = LC1 }
-                                                                                ; grab_until_balanced(D1,Acc1,Cs,LC1,LC2,InS1) ).
+grab_until_balanced(D, Acc, Cs, LC0, LC2, InS) --> [C],
+    ( { InS = 1, C = 0'\\ } -> [E], { ( E=10 -> LC1 is LC0+1 ; LC1 = LC0 ) },
+                               grab_until_balanced(D, [E, C|Acc], Cs, LC1, LC2, 1)
+    ; { ( C=0'" -> InS1 is 1-InS ; InS1 = InS ),
+        ( InS = 0 -> ( C=0'( -> D1 is D+1
+                     ; C=0') -> D1 is D-1
+                              ; D1 = D )
+                   ; D1 = D ),
+        Acc1=[C|Acc],
+        ( C=10 -> LC1 is LC0+1 ; LC1 = LC0 ) },
+      ( { D1=:=0, InS1=0 } -> { reverse(Acc1,Cs) , LC2 = LC1 }
+                            ; grab_until_balanced(D1,Acc1,Cs,LC1,LC2,InS1) ) ).
 
 %Read a balanced (...) block if available, turn into string, then continue with rest, ignoring comments:
 top_forms([],_) --> blanks, eos.
@@ -73,6 +76,7 @@ top_forms([Term|Fs], LC0) --> newlines(LC0, LC1),
 
 %Strip off code that is commented out, while tracking when inside of string:
 strip([], _, []).
+strip([0'\\, C|R], 1, [0'\\, C|O]) :- !, strip(R, 1, O).
 strip([0'"|R], 0, [0'"|O]) :- !, strip(R, 1, O).
 strip([0'"|R], 1, [0'"|O]) :- !, strip(R, 0, O).
 strip([0'\n|R], In, [0'\n|O]) :- !, strip(R, In, O).
