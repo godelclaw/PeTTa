@@ -465,7 +465,10 @@ memberchk_eq(V, [_|T]) :- memberchk_eq(V, T).
 next_lambda_name(Name) :- ( catch(nb_getval(lambda_counter, Prev), _, Prev = 0) ),
                           N is Prev + 1,
                           nb_setval(lambda_counter, N),
-                          format(atom(Name), 'lambda_~d', [N]).
+                          format(atom(Candidate), 'lambda_~d', [N]),
+                          ( ( fun(Candidate) ; current_predicate(Candidate/_) )
+                            -> next_lambda_name(Name)
+                            ; Name = Candidate ).
 
 declared_output_type(F, OutType) :- atom(F),
 									nonvar(OutType),
