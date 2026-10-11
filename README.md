@@ -34,6 +34,14 @@ The following projects are cloned and built by build.sh:
 
 **Repository:** [faiss_ffi](https://github.com/patham9/faiss_ffi) dependent on [facebookresearch/faiss](https://github.com/facebookresearch/faiss)
 
+### Space programs
+
+Each space owns the program of the equations stored in it. `&self`'s program is
+the default; `(eval Expr Space)` evaluates `Expr` with another space's program,
+whose calls reach that space's own functions and the builtins, never `&self`'s.
+Adding or removing an equation in one space leaves every other space's program
+as it was (`examples/space_ownership.metta`).
+
 ### Extension libraries
 
 Please check out [Extension libraries](https://github.com/trueagi-io/PeTTa/wiki/Extension-libraries) for a set of extension libraries that can be invoked from MeTTa files directly from the git repository.

@@ -220,6 +220,7 @@ builtin_spec(maplist/4, implementation(external), typing(untyped), evaluation(ea
 
 % Imports and dynamic evaluation.
 builtin_spec(eval/1, implementation(metta), typing(untyped), evaluation(special), cardinality(unspecified), lowering(special(eval_source))).
+builtin_spec(eval/2, implementation(metta), typing(untyped), evaluation(special), cardinality(unspecified), lowering(special(eval_space))).
 builtin_spec(reduce/1, implementation(external), typing(untyped), evaluation(special), cardinality(unspecified), lowering(special(dynamic_reduce))).
 builtin_spec('import!'/2, implementation(metta), typing(untyped), evaluation(eager), cardinality(unspecified), lowering(generic)).
 builtin_spec('library-import!'/2, implementation(metta), typing(untyped), evaluation(eager), cardinality(unspecified), lowering(generic)).

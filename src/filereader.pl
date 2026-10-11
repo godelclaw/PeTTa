@@ -5,6 +5,7 @@
 :- dynamic working_dir/1.
 :- dynamic active_metta_load/2.
 :- dynamic metta_source_functions_started/1.
+:- dynamic metta_space_functions_started/2.
 
 push_working_dir(Filename) :- file_directory_name(Filename, Dir0),
                               ( absolute_file_name(Dir0, Dir, [file_type(directory), file_errors(fail)])
@@ -30,7 +31,7 @@ load_metta_file_impl(Filename, Results, Space) :-
     ).
 
 load_metta_file_contents(CanonPath, Results, Space) :-
-    claim_source_compile(CanonPath, Mode),
+    claim_source_compile(CanonPath, Space, Mode),
     setup_call_cleanup(
         push_working_dir(CanonPath),
         ( read_file_to_string(CanonPath, S, []),
@@ -40,6 +41,13 @@ load_metta_file_contents(CanonPath, Results, Space) :-
                              nb_setval('$metta_file', Prev)) ),
         pop_working_dir
     ).
+
+%Each space compiles a source's functions into its own program once:
+claim_source_compile(CanonPath, Space, Mode) :-
+    ( Space == '&self' -> claim_source_compile(CanonPath, Mode)
+    ; metta_space_functions_started(CanonPath, Space) -> Mode = space_only
+    ; assertz(metta_space_functions_started(CanonPath, Space)),
+      Mode = compile_functions ).
 
 claim_source_compile(CanonPath, space_only) :-
     metta_source_functions_started(CanonPath), !.
@@ -73,7 +81,7 @@ process_metta_string(S, Results) :- process_metta_string(S, Results, '&self').
 process_metta_string(S, Results, Space) :-
     process_metta_string(S, Results, Space, compile_functions).
 process_metta_string(S, Results, Space, Mode) :- metta_string_forms(S, Forms),
-                                           maplist(parse_form, Forms, ParsedForms),
+                                           maplist(parse_form(Space), Forms, ParsedForms),
                                            %declaration prepass: every function type declaration in the
                                            %file is visible to every definition in it, independent of order
                                            with_decl_notifications_batched(
@@ -88,23 +96,24 @@ process_metta_string(S, Results, Space, Mode) :- metta_string_forms(S, Forms),
                                            %cleaned on the way out, error or not:
                                            current_metta_file(File),
                                            setup_call_cleanup(
-                                               precache_pending_bodies(File, ParsedForms),
+                                               precache_pending_bodies(File, Space, ParsedForms),
                                                with_unified_file_analysis_for_mode(
-                                                   Mode, ParsedForms,
+                                                   Space, Mode, ParsedForms,
                                                    ( %exhaustiveness is a property of the whole clause set, so it
                                                      %is judged here, once the file's clauses and declarations are
                                                      %all visible, and before any of its forms runs:
-                                                     det_exhaustiveness_prepass(ParsedForms),
+                                                     ( Space == '&self' -> det_exhaustiveness_prepass(ParsedForms) ; true ),
                                                      maplist(process_form(Space, Mode), ParsedForms, ResultsList) )),
                                                retractall(pending_clause_body(File, _, _, _))), !,
                                            append(ResultsList, Results).
 
-% Re-importing a source into another MeTTa space only replays its atoms.  Its
-% functions remain the already-compiled clauses from the first load, so a
-% second whole-file IR solve has no consumer and cannot affect code generation.
-with_unified_file_analysis_for_mode(compile_functions, ParsedForms, Goal) :- !,
+% Re-importing a source into the same space only replays its atoms.  Its
+% functions remain the clauses compiled by the first load, so a second
+% whole-file IR solve has no consumer and cannot affect code generation.
+% A named space compiles each function as a runtime addition to its program.
+with_unified_file_analysis_for_mode('&self', compile_functions, ParsedForms, Goal) :- !,
     with_unified_file_analysis(ParsedForms, Goal).
-with_unified_file_analysis_for_mode(_, _, Goal) :-
+with_unified_file_analysis_for_mode(_, _, _, Goal) :-
     call(Goal).
 
 register_function_signature(F, Arity) :- warn_if_used_as_symbol(F),
@@ -117,18 +126,27 @@ warn_if_used_as_symbol(F) :- \+ fun(F), symbol_head(F), !,
                              format(user_error, "Warning: ~w is defined or imported after already being used; earlier expressions treat it as a plain symbol. Move the import or definition above the first use.~n", [F]).
 warn_if_used_as_symbol(_).
 
-precache_pending_bodies(File, ParsedForms) :-
+precache_pending_bodies(File, '&self', ParsedForms) :- !,
     forall(( member(parsed(function, _, _, Term), ParsedForms),
              Term = [=, [F|Args], Body], atom(F) ),
            ( length(Args, N),
              assertz(pending_clause_body(File, F, N, Body)) )).
+precache_pending_bodies(_, _, _).
 
-%First pass to convert MeTTa to Prolog Terms and register functions:
-parse_form(form(S, L), parsed(T, S, L, Term)) :- sread(S, Term),
+%First pass to convert MeTTa to Prolog Terms and register the space's functions:
+parse_form(Space, form(S, L), parsed(T, S, L, Term)) :- sread(S, Term),
                                                  ( Term = [=, [F|W], _], atom(F) -> length(W, N), Arity is N + 1,
-                                                                                    register_function_signature(F, Arity), T=function
+                                                                                    register_owned_function_signature(Space, F, Arity), T=function
                                                                                   ; T=expression ).
-parse_form(runnable(S, L), parsed(runnable, S, L, Term)) :- sread(S, Term).
+parse_form(_, runnable(S, L), parsed(runnable, S, L, Term)) :- sread(S, Term).
+
+register_owned_function_signature('&self', F, Arity) :- !,
+    register_function_signature(F, Arity),
+    register_space_fun('&self', F, F).
+register_owned_function_signature(Space, F, Arity) :-
+    register_space_fun(Space, F, Pred),
+    register_fun(Pred),
+    ( catch(arity(Pred, Arity), _, fail) -> true ; assertz(arity(Pred, Arity)) ).
 
 %Report where a static type/determinism error was raised before rethrowing it,
 %and publish the same source location while declaration caching runs so the
@@ -157,13 +175,16 @@ process_form(Space, _, parsed(expression, FormStr, Line, Term), []) :-
                                                            ( silent(true) -> true ; swrite(Term,STerm),
                                                                                     format("\e[33m--> metta sexpr -->~n\e[36m~w~n", [STerm]),
                                                                                     format("\e[33m^^^^^^^^^^^^^^^^^^^~n\e[0m") ).
-process_form(_, _, parsed(runnable, FormStr, Line, Term), Result) :- with_form_location(Line, FormStr,
-                                                                                     translate_expr([collapse, Term], Goals, Result)),
+process_form(Space, _, parsed(runnable, FormStr, Line, Term), Result) :- with_form_location(Line, FormStr,
+                                                                                     with_translation_space(Space,
+                                                                                         translate_expr([collapse, Term], Goals, Result))),
                                                                   ( silent(true) -> true ; format("\e[33m--> metta runnable  -->~n\e[36m!~w~n\e[33m-->  prolog goal  -->\e[35m ~n", [FormStr]),
                                                                                            forall(member(G, Goals), portray_clause((:- G))),
                                                                                            format("\e[33m^^^^^^^^^^^^^^^^^^^^^^^~n\e[0m") ),
                                                                   call_goals(Goals).
 process_form(Space, space_only, parsed(function, _, _, Term), []) :- !, add_sexp(Space, Term).
+process_form(Space, compile_functions, parsed(function, FormStr, Line, Term), []) :- Space \== '&self', !,
+                                                                  with_form_location(Line, FormStr, 'add-atom'(Space, Term, true)).
 process_form(Space, compile_functions, parsed(function, FormStr, Line, Term), []) :- add_sexp(Space, Term),
                                                                   with_form_location(Line, FormStr,
                                                                                      translate_clause(Term, Clause, true,

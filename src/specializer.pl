@@ -7,6 +7,7 @@
 %higher-order argument, (= (evolve $r $g) (evolve (twice $r) $g)) - would otherwise diverge at compile time:
 maybe_specialize_call(HV, AVs, Out, Goal) :- catch(nb_getval('$spec_stack', Stack), _, Stack = []),
                                              \+ memberchk(HV, Stack),
+                                             \+ owned_space_function(HV, _),
                                              setup_call_cleanup( (catch(nb_getval(specneeded,Prev),_,Prev = []), nb_setval(specneeded,false),
                                                                   nb_setval('$spec_stack', [HV|Stack])),
                                                                  specialize_call(HV, AVs, Out, Goal),
@@ -126,6 +127,7 @@ forget_symbol(Name) :- retractall('&self'(=, [Name|_], _)),
                        metta_on_function_removed(Name),
                        retractall(arity(Name,_)),
                        retractall(fun(Name)),
+                       retractall(space_fun(_, _, Name)),
                        catch(nb_delete(Name), _, true),
                        retractall(ho_specialization(Name,_)).
 

@@ -21,8 +21,117 @@ constrain_args(In, Out, Goals) :- maplist(constrain_args, In, Out, NestedGoalsLi
 %cons and declaration-only constructors stay literal. Args must be a proper
 %list; specialization may produce an open pattern [F|Tail] of no fixed arity.
 functional_pattern_application([F|Args], F, Args) :-
-    atom(F), F \== cons, fun(F),
+    atom(F), F \== cons, callable_fun(F, _),
     is_list(Args).
+
+%%% Executable space ownership %%%
+% Each space owns the compiled program of the equations stored in it. &self
+% compiles under plain predicate names, so its code is unchanged. A named
+% space compiles each function under an injective internal name, and its code
+% calls its own functions and the global ones &self does not own (builtins),
+% never another space's. (eval Expr Space) evaluates within a given space.
+
+:- dynamic space_fun/3.   % space_fun(Space, Function, Predicate)
+
+current_translation_space(Space) :-
+    ( nb_current('$translation_space', Current) -> Space = Current
+    ; Space = '&self' ).
+
+with_translation_space(Space, Goal) :-
+    current_translation_space(Previous),
+    ( Previous == Space -> call(Goal)
+    ; setup_call_cleanup(nb_setval('$translation_space', Space),
+                         Goal,
+                         nb_setval('$translation_space', Previous)) ).
+
+space_pred('&self', F, F) :- !.
+space_pred(Space, F, Pred) :-
+    atom_length(Space, SpaceLength),
+    atom_length(F, FunctionLength),
+    atomic_list_concat(['$petta_space$', SpaceLength, '$', Space,
+                        '$', FunctionLength, '$', F], Pred).
+
+register_space_fun(Space, F, Pred) :-
+    space_pred(Space, F, Pred),
+    ( space_fun(Space, F, Pred) -> true
+    ; assertz(space_fun(Space, F, Pred)) ).
+
+owned_space_function(Pred, Space) :-
+    space_fun(Space, _, Pred), Space \== '&self', !.
+
+%The equation a space compiles: a named space renames the head to its own
+%predicate, and the body resolves while compiling in that space.
+owned_function_source(Space, [Eq, [F|Args], Body], Pred, [Eq, [Pred|Args], Body]) :-
+    ( Space \== '&self', atom(Space), atom(F)
+      -> space_pred(Space, F, Pred)
+    ; Pred = F ).
+
+%The predicate a call to F denotes in Space:
+space_call_target(Space, F, Pred) :-
+    ( space_fun(Space, F, Owned) -> Pred = Owned
+    ; Space == '&self' -> fun(F), Pred = F
+    ; fun(F), \+ space_fun('&self', F, _) -> Pred = F ).
+
+callable_fun(F, Pred) :-
+    current_translation_space(Space),
+    ( Space == '&self' -> fun(F), Pred = F
+    ; space_call_target(Space, F, Pred) ).
+
+%Dependencies of named-space code are on the predicates its calls resolve to:
+space_dependency_view(Body, View) :-
+    current_translation_space(Space),
+    ( Space == '&self' -> View = Body
+    ; space_owned_view(Space, Body, View) ).
+
+space_owned_view(Space, Term, View) :-
+    ( var(Term) -> View = Term
+    ; atom(Term), space_fun(Space, Term, Pred) -> View = Pred
+    ; is_list(Term) -> maplist(space_owned_view(Space), Term, View)
+    ; View = Term ).
+
+%Runtime dispatch, evaluation and aggregation stay in the compiling space:
+reduce_goal(Term, Out, Goal) :-
+    current_translation_space(Space),
+    ( Space == '&self' -> Goal = reduce(Term, Out)
+    ; Goal = space_reduce(Space, Term, Out) ).
+
+agg_reduce_goal(AF, V, Goal) :-
+    current_translation_space(Space),
+    ( Space == '&self' -> Goal = agg_reduce(AF, V)
+    ; Goal = space_agg_reduce(Space, AF, V) ).
+
+eval_goal(Expr, Out, Goal) :-
+    current_translation_space(Space),
+    ( Space == '&self' -> Goal = eval(Expr, Out)
+    ; Goal = eval(Expr, Space, Out) ).
+
+hyperpose_goal(Exprs, Out, Goal) :-
+    current_translation_space(Space),
+    ( Space == '&self' -> Goal = hyperpose_runtime(Exprs, Out)
+    ; Goal = space_hyperpose_runtime(Space, Exprs, Out) ).
+
+space_reduce(Space, [F|Args], Out) :-
+        nonvar(F), atom(F), space_call_target(Space, F, Pred)
+        -> length(Args, N),
+           Arity is N + 1,
+           ( current_predicate(Pred/Arity), \+ (current_op(_, _, Pred), Arity =< 2)
+             -> resolve_memoization(Pred, Args, Out, Goal),
+                catch(call(Goal), _, fail)
+           ; incomplete_application_kind(Pred, Arity, partial)
+             -> Out = partial(Pred, Args)
+           ; throw_function_overapplication(Pred, N) )
+         ; compound(F), F = partial(Base, Bound)
+           -> append(Bound, Args, NewArgs),
+              space_reduce(Space, [Base|NewArgs], Out)
+         ; Out = [F|Args],
+           \+ cyclic_term(Out).
+
+space_agg_reduce(Space, AF, Acc, Val, NewAcc) :-
+    space_reduce(Space, [AF, Acc, Val], NewAcc).
+
+space_hyperpose_runtime(Space, Exprs, Out) :-
+    is_list(Exprs),
+    concurrent_and(member(Expr, Exprs), eval(Expr, Space, Out)).
 
 %Flatten (= Head Body) MeTTa function into a Prolog clause. Dependencies are
 %those observed by all nested analyses; assertion sites attach them to the real
@@ -39,7 +148,8 @@ translate_clause(Input, Clause, ConstrainArgs, Dependencies) :-
                     F, N,
                     translate_clause_core(Input, Clause, ConstrainArgs)),
                 Events)),
-        analysis_term_dependencies(SourceBody, TermDependencies),
+        space_dependency_view(SourceBody, DependencyBody),
+        analysis_term_dependencies(DependencyBody, TermDependencies),
         analysis_function_decl_dependencies(F, DeclDependencies),
         append([[decl(F/N), clause_set(F/N)],
                 TermDependencies, DeclDependencies],
@@ -181,6 +291,11 @@ function_has_conditional_commit(F, N) :-
 %%% only a complete stage swaps them, so an exception cannot leave the function
 %%% half-recompiled.
 recompile_function_clauses(F) :-
+    ( owned_space_function(F, Space)
+      -> with_translation_space(Space, recompile_owned_function_clauses(F))
+    ; recompile_owned_function_clauses(F) ).
+
+recompile_owned_function_clauses(F) :-
     function_source_clauses(F, Us),
     ( Us == [] -> true
     ; snapshot_recompile_state(F, Snapshot),
@@ -661,7 +776,8 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                   append(GsH, [concurrent_and(member((Goal,Res), Branches), (call(Goal), Out = Res))], Goals)
                ; translate_expr(L, GsL, LV),
                  append(GsH, GsL, Inner),
-                 append(Inner, [hyperpose_runtime(LV, Out)], Goals) )
+                 hyperpose_goal(LV, Out, HyperposeGoal),
+                 append(Inner, [HyperposeGoal], Goals) )
         ; special_builtin_form(HV, T, with_mutex), T = [M,X]
           -> translate_expr_to_conj(X, Conj, Out),
                                          append(GsH, [with_mutex(M,Conj)], Goals)
@@ -784,10 +900,12 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
              translate_expr(TF, GsTF, TFHV),
              TestList = [TFHV, V],
              goals_list_to_conj(GsGF, GPre),
-             GenGoal = (GPre, reduce(GenList, V)),
+             reduce_goal(GenList, V, GenReduce),
+             GenGoal = (GPre, GenReduce),
+             reduce_goal(TestList, Truth, TestReduce),
              append(GsH, GsTF, Tmp0),
              set_out_type(Out, 'Bool'),
-             append(Tmp0, [( forall(GenGoal, ( reduce(TestList, Truth), Truth == true )) -> Out = true ; Out = false )], Goals)
+             append(Tmp0, [( forall(GenGoal, ( TestReduce, Truth == true )) -> Out = true ; Out = false )], Goals)
         ; special_builtin_form(HV, T, foldall), T = [AF, GF, InitS]
           -> translate_expr_to_conj(InitS, ConjInit, Init),
              translate_expr(AF, GsAF, AFV),
@@ -804,7 +922,9 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
              append(GsH, GsAF, Tmp1),
              append(Tmp1, GsGF, Tmp2),
              foldall_out_type(AFV, Init, Out),
-             append(Tmp2, [ConjInit, foldall(agg_reduce(AFV, V), reduce(GenList, V), Init, Out)], Goals)
+             agg_reduce_goal(AFV, V, AggGoal),
+             reduce_goal(GenList, V, FoldReduce),
+             append(Tmp2, [ConjInit, foldall(AggGoal, FoldReduce, Init, Out)], Goals)
         %--- Higher-order functions with pseudo-lambdas and lambdas ---:
         ; special_builtin_form(HV, T, foldl_pseudo_lambda),
           T = [List, Init, AccVar, XVar, Body]
@@ -913,7 +1033,8 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
         %Produce a dynamic dispatch, translating Args for nesting:
         ; special_builtin_form(HV, T, dynamic_reduce), T = [Expr]
           -> ( var(Expr) -> translate_expr(Expr, GsH, ExprOut),
-                                                     Goals = [reduce(ExprOut, Out)|GsH]
+                                                     reduce_goal(ExprOut, Out, ReduceGoal),
+                                                     Goals = [ReduceGoal|GsH]
                                                    ; Expr = [F|Args],
                                                      translate_args(Args, GsArgs, ArgsOut),
                                                      append(GsH, GsArgs, Inner),
@@ -925,13 +1046,20 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                                        -> set_unique_decl_out(F, NR, Out)
                                                      ; true ),
                                                      append(Inner, GuardGs, Inner1),
-                                                     append(Inner1, [reduce(ExprOut, Out)], Goals) )
+                                                     reduce_goal(ExprOut, Out, ReduceGoal),
+                                                     append(Inner1, [ReduceGoal], Goals) )
         %Invoke translator to evaluate MeTTa code as data/list:
         ; special_builtin_form(HV, T, eval_source), T = [Arg]
           -> ( nonvar(Arg), Arg = [Q, Quoted], Q == quote
                                      -> translate_expr(Quoted, GsQ, Out),           %(eval (quote E)) == E
                                         append(GsH, GsQ, Goals)
-                                      ; append(GsH, [eval(Arg, Out)], Goals) )
+                                      ; eval_goal(Arg, Out, EvalGoal),
+                                        append(GsH, [EvalGoal], Goals) )
+        %Evaluate within an explicitly selected space:
+        ; special_builtin_form(HV, T, eval_space), T = [Arg, SpaceExpr]
+          -> translate_expr(SpaceExpr, GsS, Space),
+             append(GsH, GsS, Inner),
+             append(Inner, [eval(Arg, Space, Out)], Goals)
         %Erased branding of a semantic role: knowledge only, no runtime goal:
         ; special_builtin_form(HV, T, brand), T = [TypeExpr, Expr]
           -> normalize_type(TypeExpr, TN),
@@ -978,11 +1106,11 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
           append(Inner, [Goal], Goals)
         %--- Automatic 'smart' dispatch, translator deciding when to create a predicate call, data list, or dynamic dispatch: ---
         %Known function or closure => type-directed call:
-        ; ( atom(HV), fun(HV) -> Fun = HV, Bound = []
+        ; ( atom(HV), callable_fun(HV, Fun) -> Bound = []
           ; compound(HV), HV = partial(Fun, Bound) )
           -> translate_typed_call(Fun, Bound, T, GsH, Goals, Out)
         %Literals (numbers, strings, etc.), known non-function atom => data:
-        ; ( atomic(HV), \+ atom(HV) ; atom(HV), \+ fun(HV) )
+        ; ( atomic(HV), \+ atom(HV) ; atom(HV), \+ callable_fun(HV, _) )
           -> note_symbol_head(HV),
              translate_args(T, GsT, AVs),
              append(GsH, GsT, Goals),
@@ -1011,12 +1139,14 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                ; known_singleton(HV, K), ( nonvar(K) ; param_promise_var(K) )
                  -> Out = [HV],
                     Goals = Inner
-               ; append(Inner, [reduce([HV], Out)], Goals) )
+               ; reduce_goal([HV], Out, ReduceGoal),
+                 append(Inner, [ReduceGoal], Goals) )
           ; translate_closure_call(HV, AVs, Inner, Goals, Out) -> true
           ; var(HV), known_singleton(HV, K), nonfunction_type(K)
             -> Out = [HV|AVs],
                Goals = Inner
-          ; append(Inner, [reduce([HV|AVs], Out)], Goals) ) ).
+          ; reduce_goal([HV|AVs], Out, ReduceGoal),
+            append(Inner, [ReduceGoal], Goals) ) ).
 
 %Values of these types can never dispatch as functions in reduce/2:
 nonfunction_type(K) :- nonvar(K), ( primitive_type(K)
@@ -1057,10 +1187,13 @@ translate_closure_call(HV, AVs, Inner, Goals, Out) :- var(HV), AVs \== [], known
                                                       length(UsedTs, N), append(UsedTs, RestTs, ArgTs),
                                                       apply_call_args(declared, closure, AVs, UsedTs, GuardGs),
                                                       append(Inner, GuardGs, Inner1),
-                                                      append(Inner1, [reduce([HV|AVs], Out)], Goals),
+                                                      reduce_goal([HV|AVs], Out, ReduceGoal),
+                                                      append(Inner1, [ReduceGoal], Goals),
                                                       append(RestTs, [OutT], RXs),
                                                       ( var(Out) -> add_known_type(Out, [H|RXs]) ; true ).
 
+closure_apply_goal(HV, AVs, Out, space_apply(Space, HV, AVs, Out)) :-
+    current_translation_space(Space), Space \== '&self', !.
 closure_apply_goal(HV, [A], Out, apply_fn1(HV, A, Out)) :- !.
 closure_apply_goal(HV, [A, B], Out, apply_fn2(HV, A, B, Out)) :- !.
 closure_apply_goal(HV, [A, B, C], Out, apply_fn3(HV, A, B, C, Out)) :- !.
@@ -1092,6 +1225,15 @@ apply_fnN(P, Args, Out) :- compound(P), P = partial(F, Bs), !,
                            append(Bs, Args, All), append(All, [Out], CallArgs),
                            Goal =.. [F|CallArgs], safe_apply(Goal).
 apply_fnN(F, Args, Out) :- reduce([F|Args], Out).
+
+%A named space applies a function name through its own program:
+space_apply(Space, F, Args, Out) :-
+    ( atom(F), space_call_target(Space, F, Pred)
+      -> append(Args, [Out], CallArgs),
+         Goal =.. [Pred|CallArgs], safe_apply(Goal)
+    ; compound(F), F = partial(_, _)
+      -> apply_fnN(F, Args, Out)
+    ; space_reduce(Space, [F|Args], Out) ).
 
 safe_apply(Goal) :- catch(Goal, error(existence_error(procedure, _), _), fail).
 
@@ -1317,7 +1459,7 @@ expression_arg_value(A, AV) :- ( maybe_closure_expr(A),
                                   ; AV = A ).
 
 %An underapplied call to a known function (would compile to partial(...)):
-maybe_closure_expr([F|Args]) :- atom(F), fun(F), is_list(Args),
+maybe_closure_expr([F0|Args]) :- atom(F0), callable_fun(F0, F), is_list(Args),
                                 length(Args, N), Arity is N + 1,
                                 \+ ( ( current_predicate(F/Arity) ; catch(arity(F, Arity), _, fail) ),
                                      \+ ( current_op(_, _, F), Arity =< 2 ) ).
@@ -1417,7 +1559,7 @@ translate_args_by_type([A|As], [T|Ts], GsOut, [AV|AVs]) :-
 
 %Handle data list:
 eval_data_term(X, [], X) :- (var(X); atomic(X)), !.
-eval_data_term([F|As], Goals, Val) :- ( atom(F), fun(F) -> translate_expr([F|As], Goals, Val)
+eval_data_term([F|As], Goals, Val) :- ( atom(F), callable_fun(F, _) -> translate_expr([F|As], Goals, Val)
                                                          ; eval_data_list([F|As], Goals, Val) ).
 
 %Handle data list entry:
