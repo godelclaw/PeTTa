@@ -1,16 +1,20 @@
-:- begin_tests(specializer_recursion).
-
+% The runtime's builtin registry is checked in user, so the runtime is loaded
+% there and the tests qualify what they add to it.
 :- ensure_loaded('../src/metta.pl').
 
-quiet :- retractall(silent(_)), assertz(silent(true)).
+:- begin_tests(specializer_recursion).
 
+quiet :- retractall(user:silent(_)), assertz(user:silent(true)).
+
+% A specialized instance that fails the type check is not specialized. Here
+% ($f "s") meets sr_broken's declared Number argument.
 test(failed_cycle_preserves_an_earlier_specialization, [setup(quiet)]) :-
     process_metta_string(
-        "(: sr_broken Bad)\n\c
+        "(: sr_broken (-> Number Number))\n\c
          (= (sr_broken $x) $x)\n\c
          (= (sr_inc $x) (+ $x 1))\n\c
          (= (sr_apply $f $x) ($f $x))\n\c
-         (= (sr_outer $f $x) (pair (sr_inner $f $x) ($f $x)))\n\c
+         (= (sr_outer $f $x) (pair (sr_inner $f $x) ($f \"s\")))\n\c
          (= (sr_inner $f $x) (if (== $x 0) done (sr_outer $f 0)))", _),
     once(maybe_specialize_call(sr_apply, [sr_inc, 1], Value, Goal)),
     once(call(Goal)), Value == 2,
@@ -21,15 +25,15 @@ test(failed_cycle_preserves_an_earlier_specialization, [setup(quiet)]) :-
     ho_specialization_failed(sr_outer, 3, [sr_broken]),
     \+ nb_current('sr_inner_Spec_[sr_broken]', _),
     \+ translated_from(_, [=, ['sr_inner_Spec_[sr_broken]'|_], _]),
-    findall(R, sr_inner(sr_broken, 1, R), [[pair, done, 0]]),
+    findall(R, sr_inner(sr_broken, 1, R), [[pair, done, "s"]]),
     once(call(Goal)).
 
 % A translator extension can throw after a mutually recursive child was built.
-sr_throw(_, _) :- throw(specializer_test_exception).
+user:sr_throw(_, _) :- throw(specializer_test_exception).
 
 test(exception_discards_generated_code_and_restores_the_stack, [setup(quiet)]) :-
     register_fun(sr_throw),
-    assertz(translator_rule(sr_throw)),
+    assertz(user:translator_rule(sr_throw)),
     process_metta_string(
         "(= (sr_exc_outer $f $x) (pair (sr_exc_inner $f $x) ($f $x)))\n\c
          (= (sr_exc_inner $f $x) (if (== $x 0) done (sr_exc_outer $f 0)))", _),
@@ -45,9 +49,9 @@ test(exception_discards_generated_code_and_restores_the_stack, [setup(quiet)]) :
 
 test(failed_attempt_discards_its_anonymous_functions, [setup(quiet)]) :-
     process_metta_string(
-        "(: sr_lambda_broken Bad)\n\c
+        "(: sr_lambda_broken (-> Number Number))\n\c
          (= (sr_lambda_broken $x) $x)\n\c
-         (= (sr_lambda_outer $f $x) (pair (|-> ($y) ($f $y)) ($f $x)))", _),
+         (= (sr_lambda_outer $f $x) (pair (|-> ($y) ($f $y)) ($f \"s\")))", _),
     findall(F, fun(F), FunctionsBefore),
     findall(Ref, translated_from(Ref, _), SourcesBefore),
     \+ maybe_specialize_call(sr_lambda_outer, [sr_lambda_broken, 1], _, _),
@@ -61,9 +65,9 @@ test(failed_attempt_discards_its_anonymous_functions, [setup(quiet)]) :-
 
 test(failed_attempt_discards_a_completed_recursive_lambda, [setup(quiet)]) :-
     process_metta_string(
-        "(: sr_back_broken Bad)\n\c
+        "(: sr_back_broken (-> Number Number))\n\c
          (= (sr_back_broken $x) $x)\n\c
-         (= (sr_back_outer $f $x) (pair (|-> ($y) (sr_back_outer $f $y)) ($f $x)))", _),
+         (= (sr_back_outer $f $x) (pair (|-> ($y) (sr_back_outer $f $y)) ($f \"s\")))", _),
     findall(F, fun(F), Before),
     \+ maybe_specialize_call(sr_back_outer, [sr_back_broken, 1], _, _),
     findall(F, fun(F), After),
