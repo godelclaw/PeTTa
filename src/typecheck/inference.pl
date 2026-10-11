@@ -74,7 +74,8 @@ begin_clause_inference(F, Args, Assume, saved(OldA, OldD, OldT)) :-
 
 assume_param_type(Arg, t(Ps, Ts), t(Ps1, [T|Ts])) :- ( var(Arg)
                                                        -> ( known_singleton(Arg, T) -> Ps1 = Ps
-                                                          ; add_known_type(Arg, T), Ps1 = [a(Arg, T)|Ps] )
+                                                          ; add_known_type(Arg, T), mark_assumed_param(Arg),
+                                                            Ps1 = [a(Arg, T)|Ps] )
                                                      ; value_single_type(Arg, T)
                                                        -> ctor_pattern_field_types(Arg), Ps1 = Ps
                                                      %a destructured variable is a parameter too
@@ -84,7 +85,8 @@ assume_param_type(Arg, t(Ps, Ts), t(Ps1, [T|Ts])) :- ( var(Arg)
 
 assume_pattern_vars([], Ps, Ps).
 assume_pattern_vars([A|As], Ps0, Ps) :- ( var(A) -> ( known_singleton(A, _) -> Ps1 = Ps0
-                                                    ; add_known_type(A, Tv), Ps1 = [a(A, Tv)|Ps0] )
+                                                    ; add_known_type(A, Tv), mark_assumed_param(A),
+                                                      Ps1 = [a(A, Tv)|Ps0] )
                                         ; is_list(A) -> assume_pattern_vars(A, Ps0, Ps1)
                                         ; Ps1 = Ps0 ),
                                         assume_pattern_vars(As, Ps1, Ps).
@@ -109,6 +111,23 @@ ctor_pattern_field_types(Arg) :- ( functional_pattern_application(Arg, _, _)
                                             error(literal_type_mismatch(_, _), typecheck), true)
                                     ; true ).
 
+%A parameter typed by an assumption is marked. The mark follows the variable
+%through unification and into the attributed copy a lambda body is compiled
+%from, where a captured parameter is not an assumption of the lambda's own.
+mark_assumed_param(V) :- put_attr(V, assumed_param, true).
+
+unmark_assumed_param(a(P, _)) :- ( var(P) -> del_attr(P, assumed_param) ; true ).
+
+%A declaration promises that its arguments are checked. An assumption is not
+%such a check, because callers are never held to it. So a call into a declared
+%function keeps its guard on an argument whose static proof rests on one.
+%Builtins keep their fused, guard-free code, and closure checks own the
+%arrow types.
+assumption_backed_arg(Fun, AV, T) :- \+ builtin_signature(Fun, _, _, _, _),
+                                     \+ is_arrow_type(T),
+                                     term_variables(AV, Vs),
+                                     member(V, Vs), get_attr(V, assumed_param, true), !.
+
 taint_assumption(AV) :- ( catch(b_getval('$assumptions', Pairs), _, fail),
                           member(a(P, _), Pairs), P == AV
                           -> catch(b_getval('$assump_taint', Ts), _, Ts = []),
@@ -117,6 +136,8 @@ taint_assumption(AV) :- ( catch(b_getval('$assumptions', Pairs), _, fail),
 
 end_clause_inference(F, Args, ExpOut, Assume, saved(OldA, OldD, OldT)) :-
         ( Assume = assume(Pairs) -> store_inferred_type(F, Pairs, Args, ExpOut) ; true ),
+        catch(b_getval('$assumptions', Current), _, Current = []),
+        maplist(unmark_assumed_param, Current),
         b_setval('$assumptions', OldA),
         b_setval('$assume_decl', OldD),
         b_setval('$assump_taint', OldT).

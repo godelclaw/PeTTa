@@ -12,19 +12,22 @@ remove_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
 %atom, registration, metadata and compiled-dependency state; concurrent
 %observers can still see the interval between staging and cleanup.
 'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], !,
+                                 owned_function_source(Space, Term, Pred, Compiled),
                                  length(W, SourceArity),
+                                 ( atom(FAtom), space_fun(Space, FAtom, Pred)
+                                   -> Owned = true ; Owned = false ),
                                  snapshot_runtime_function_add(
-                                     FAtom, SourceArity, Snapshot),
+                                     Pred, SourceArity, Snapshot),
                                  catch(
                                      ( runtime_add_function_tx(
-                                           Space, Term, FAtom, W, Snapshot)
+                                           Space, Term, Compiled, Snapshot)
                                        -> true
-                                       ; cleanup_runtime_function_add(
-                                           FAtom, Snapshot),
+                                       ; cleanup_owned_function_add(
+                                           Space, FAtom, Pred, Owned, Snapshot),
                                        fail ),
                                      Error,
-                                     ( cleanup_runtime_function_add(
-                                           FAtom, Snapshot),
+                                     ( cleanup_owned_function_add(
+                                           Space, FAtom, Pred, Owned, Snapshot),
                                        throw(Error) )).
 
 %Add an atom to the space:
@@ -32,8 +35,11 @@ remove_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
     typed_space_runtime_value_ok(Space, Term),
     add_sexp(Space, Term).
 
-runtime_add_function_tx(Space, Term, FAtom, W, Snapshot) :-
+%The space stores Term as written; its program compiles Compiled, whose head
+%is the owner's predicate (owned_function_source/4).
+runtime_add_function_tx(Space, Term, Compiled, Snapshot) :-
     Term = [=, [FAtom|W], TermBody],
+    Compiled = [=, [Pred|_], _],
     RawTerm =.. [Space, '=', [FAtom|W], TermBody],
     assertz(RawTerm, RawRef),
     % Bindings are undone when a later goal fails or throws, so the staged refs
@@ -41,24 +47,32 @@ runtime_add_function_tx(Space, Term, FAtom, W, Snapshot) :-
     arg(7, Snapshot, Refs),
     nb_setarg(1, Refs, RawRef),
     maybe_cache_type_decl(Space, Term),
-    register_fun(FAtom),
+    ( atom(FAtom) -> register_space_fun(Space, FAtom, Pred) ; true ),
+    register_fun(Pred),
     length(W, N),
     Arity is N + 1,
-    assertz(arity(FAtom, Arity)),
+    assertz(arity(Pred, Arity)),
     % A runtime clause is translated before its normal mutation notification.
     % Drop any old unified self-summary now so recursive validation cannot
     % consume the pre-add contract from an enclosing batch scope.
     unified_checker_invalidate_event(
-        clause_changed(FAtom/N, runtime_preparing)),
-    once(translate_clause(Term, Clause, true, Dependencies)),
+        clause_changed(Pred/N, runtime_preparing)),
+    with_translation_space(
+        Space, once(translate_clause(Compiled, Clause, true, Dependencies))),
     assertz(Clause, ClauseRef),
     nb_setarg(2, Refs, ClauseRef),
-    assertz(translated_from(ClauseRef, Term)),
-    record_compiled_dependencies(ClauseRef, FAtom/N, Dependencies),
-    notify_mutation(clause_changed(FAtom/N, runtime)),
-    metta_on_function_changed(FAtom),
-    invalidate_specializations(FAtom),
+    assertz(translated_from(ClauseRef, Compiled)),
+    record_compiled_dependencies(ClauseRef, Pred/N, Dependencies),
+    notify_mutation(clause_changed(Pred/N, runtime)),
+    metta_on_function_changed(Pred),
+    invalidate_specializations(Pred),
     maybe_print_compiled_clause("added function", Term, Clause).
+
+cleanup_owned_function_add(Space, F, Pred, Owned, Snapshot) :-
+    cleanup_runtime_function_add(Pred, Snapshot),
+    ( Owned == false, atom(F)
+      -> retractall(space_fun(Space, F, Pred))
+    ; true ).
 
 snapshot_runtime_function_add(F, N,
         runtime_add_snapshot(N, FunFacts, Arities, Recompile,
@@ -137,30 +151,34 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 %%Remove a function atom:
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body], !,
                                        remove_sexp(Space, Term),
-                                       catch(nb_getval(F, Prev), _, Prev = []),
+                                       %only the owner's compiled clause goes:
+                                       owned_function_source(Space, Term, Pred, Compiled),
+                                       catch(nb_getval(Pred, Prev), _, Prev = []),
                                        (   select(Meta, Prev, Rest),
                                            Meta = fun_meta(Args0, Body0, _),
                                            Args0 =@= Args,
                                            Body0 =@= Body
-                                           -> ( Rest == [] -> nb_delete(F)
-                                                            ; nb_setval(F, Rest) ) ; true ),
-                                       findall(Ref, translated_from(Ref, Term), Refs),
+                                           -> ( Rest == [] -> nb_delete(Pred)
+                                                            ; nb_setval(Pred, Rest) ) ; true ),
+                                       findall(Ref, translated_from(Ref, Compiled), Refs),
                                        forall(member(Ref, Refs),
                                               ( forget_compiled_dependencies(Ref),
                                                 erase(Ref) )),
-                                       retractall(translated_from(_, Term)),
-                                       metta_on_function_changed(F),
-                                       invalidate_specializations(F),
+                                       retractall(translated_from(_, Compiled)),
+                                       metta_on_function_changed(Pred),
+                                       invalidate_specializations(Pred),
                                        length(Args, N),
-                                       ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
-                                         -> retractall(fun(F)), metta_on_function_removed(F)
+                                       ( \+ ( current_predicate(Pred/A), functor(H2, Pred, A), clause(H2, _, _) )
+                                         -> retractall(fun(Pred)),
+                                            ( atom(F) -> retractall(space_fun(Space, F, Pred)) ; true ),
+                                            metta_on_function_removed(Pred)
                                          ; true ),
                                        % Callable classification is part of the
                                        % unified call contract.  Drop the last
                                        % fun/1 marker before rebuilding callers
                                        % so they see data syntax, not a stale
                                        % unknown function call.
-                                       notify_mutation(clause_changed(F/N, runtime)),
+                                       notify_mutation(clause_changed(Pred/N, runtime)),
                                        ( Refs = [] -> Removed = false ; Removed = true ).
 
 %Remove all same atoms:

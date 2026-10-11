@@ -381,6 +381,9 @@ py_bool_norm(R, R).
 eval(C, Out) :- translate_expr(C, Goals, Out),
                 call_goals(Goals).
 
+eval(C, Space, Out) :- with_translation_space(Space, translate_expr(C, Goals, Out)),
+                       call_goals(Goals).
+
 call_goals([]).
 call_goals([G|Gs]) :- call(G), 
                       call_goals(Gs).

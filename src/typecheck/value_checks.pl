@@ -275,7 +275,10 @@ arg_statically_ok(AV, T) :- \+ \+ ( var(AV) -> ( known_singleton(AV, K) -> type_
 check_call_arg(Mode, Fun, AV, T, Gs) :- ( var(AV)
                                           -> ( known_singleton(AV, K)
                                                -> ( nonvar(T), wildcard_type(T) -> Gs = []  %wildcards carry no knowledge
-                                                  ; type_unify(K, T) -> oracle_arg_check(AV, T, Gs)
+                                                  ; type_unify(K, T)
+                                                    -> ( Mode == declared, assumption_backed_arg(Fun, AV, T)
+                                                         -> type_guard(Fun, AV, T, Gs)
+                                                          ; oracle_arg_check(AV, T, Gs) )
                                                   %brands are erased at runtime, so a
                                                   %conflicting brand on a promised type
                                                   %rejects now:
@@ -291,7 +294,10 @@ check_call_arg(Mode, Fun, AV, T, Gs) :- ( var(AV)
                                              ; Mode == inferred -> Gs = []
                                              ; type_guard(Fun, AV, T, Gs) )
                                         ; check_value(AV, T, St),   %also binds an open T: knowledge
-                                          ( St == ok -> oracle_arg_check(AV, T, Gs)
+                                          ( St == ok
+                                            -> ( Mode == declared, assumption_backed_arg(Fun, AV, T)
+                                                 -> type_guard(Fun, AV, T, Gs)
+                                                  ; oracle_arg_check(AV, T, Gs) )
                                           ; St == mismatch
                                             -> ( Mode == declared
                                                  -> throw(error(literal_type_mismatch(AV, T), typecheck))

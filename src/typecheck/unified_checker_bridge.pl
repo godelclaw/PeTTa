@@ -1122,7 +1122,11 @@ snapshot_attribute(_, _, none).
 install_environment_attrs([], []).
 install_environment_attrs([binding(_, Var)|Bindings],
                           [attrs(TKnown, MReq, ProperList)|Attrs]) :- !,
+    % An inference-assumption mark belongs to the variable, not to the
+    % branch-local view, so it survives the swap.
+    snapshot_attribute(Var, assumed_param, Assumed),
     del_attrs(Var),
+    install_attribute(Var, assumed_param, Assumed),
     install_attribute(Var, tknown, TKnown),
     install_attribute(Var, mreq, MReq),
     install_attribute(Var, proper_list_cert, ProperList),

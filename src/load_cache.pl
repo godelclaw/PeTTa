@@ -248,7 +248,8 @@ order_referring(Pending, [Change|Ordered]) :-
 % its digest, and the MeTTa and Prolog names in each directory it read MeTTa
 % files from.
 load_inputs(Path, state(_, _, Sources0, _), state(_, _, Sources1, _), inputs(Files, Dirs)) :-
-    findall(F, user:metta_source_functions_started(F), Metta),
+    findall(F, ( user:metta_source_functions_started(F)
+               ; user:metta_space_functions_started(F, _) ), Metta),
     findall(S, ( member(S, Sources1), \+ memberchk(S, Sources0) ), Prolog),
     append([[Path], Metta, Prolog], Files0),
     sort(Files0, FileList),

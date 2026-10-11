@@ -34,6 +34,14 @@ The following projects are cloned and built by build.sh:
 
 **Repository:** [faiss_ffi](https://github.com/patham9/faiss_ffi) dependent on [facebookresearch/faiss](https://github.com/facebookresearch/faiss)
 
+### Space programs
+
+Each space owns the program of the equations stored in it. `&self`'s program is
+the default; `(eval Expr Space)` evaluates `Expr` with another space's program,
+whose calls reach that space's own functions and the builtins, never `&self`'s.
+Adding or removing an equation in one space leaves every other space's program
+as it was (`examples/space_ownership.metta`).
+
 ### Extension libraries
 
 Please check out [Extension libraries](https://github.com/trueagi-io/PeTTa/wiki/Extension-libraries) for a set of extension libraries that can be invoked from MeTTa files directly from the git repository.
@@ -80,7 +88,12 @@ argument it *can* see is definitely mismatched still fails, at the call site's
 guard, because inference already elided the checks inside the callee
 (`examples/fail_inferred_literal_mismatch.metta`). Declared types are
 unaffected — they are checked, and rejected, exactly as before
-(`examples/fail_declared_sentinel_param.metta`).
+(`examples/fail_declared_sentinel_param.metta`). That holds when the argument is
+an undeclared function's own parameter, too: its inferred type was demanded of
+nobody, so it proves nothing, and the call keeps its check. A lambda written
+directly in an arrow position of a declaration is typed by that declaration,
+since the callee is checked to call it only with the declared types
+(`examples/inferred_param_declared_callee.metta`).
 
 A variable bound by a *destructuring* head pattern is a parameter too, and is
 inferred the same way: `(= (tvf (stv $s $c)) (* $s $c))` infers `(-> (stv
