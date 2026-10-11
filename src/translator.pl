@@ -268,13 +268,19 @@ recompile_function(function(Space, _F, Pred, Clauses)) :-
 specialization_stack(Stack) :-
     catch(nb_getval('$spec_stack', Stack), _, Stack = []).
 
+%Every function counts as being compiled, so no new specialization starts. A
+%nested specialization attempt expects its scope of created symbols, opened
+%here when none is active.
 with_specialization_suppressed(Goal) :-
     specialization_stack(Prior),
     findall(F, fun(F), Functions0),
     sort(Functions0, Functions),
-    setup_call_cleanup(nb_setval('$spec_stack', Functions),
+    ( nb_current('$spec_created', _) -> OwnScope = false ; OwnScope = true ),
+    setup_call_cleanup(( nb_setval('$spec_stack', Functions),
+                         ( OwnScope == true -> nb_linkval('$spec_created', []) ; true ) ),
                        Goal,
-                       nb_setval('$spec_stack', Prior)).
+                       ( nb_setval('$spec_stack', Prior),
+                         ( OwnScope == true -> nb_delete('$spec_created') ; true ) )).
 
 invalidate_all_specializations :-
     findall(F, ho_specialization(F, _), Functions0),
