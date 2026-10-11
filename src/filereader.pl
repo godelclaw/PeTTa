@@ -57,12 +57,9 @@ process_metta_string(S, Results, Space) :-
 process_metta_string(S, Results, Space, Mode) :- string_codes(S, Cs),
     strip(Cs, 0, Codes), phrase(top_forms(Forms, 1), Codes),
     maplist(parse_form(Space), Forms, ParsedForms),
-    findall(F-TypeChain,
-      ( Mode == compile_functions, member(parsed(expression, _, Term), ParsedForms),
-        function_type_annotation_term(Term, F, TypeChain) ), PredeclaredTypes),
-    with_predeclared_function_types(Space, PredeclaredTypes,
-      with_translation_space(Space,
-        maplist(process_form(Space, Mode), ParsedForms, ResultsList))), !,
+    % A declaration takes effect where it stands.
+    with_translation_space(Space,
+      maplist(process_form(Space, Mode), ParsedForms, ResultsList)), !,
     append(ResultsList, Results).
 
 register_function_signature(F, Arity) :- warn_if_used_as_symbol(F),

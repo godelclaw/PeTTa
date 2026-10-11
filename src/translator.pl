@@ -1,3 +1,8 @@
+%Compiler metadata: one fact per translated equation, the newest first. Database facts, so that a transaction
+%undoes them together with the compiled clauses, and local to the thread that translated the function, as
+%they were in global variables:
+:- thread_local function_metadata/2.
+
 %Pattern matching, structural and functional/relational constraints on arguments:
 constrain_args(X, X, []) :- (var(X); atomic(X)), !.
 constrain_args([F, A, B], Out, Goals) :- nonvar(F),
@@ -22,6 +27,7 @@ translate_clause(Input, (Head :- BodyConj), ConstrainArgs) :-
                                                ( ConstrainArgs -> maplist(constrain_args, Args0, Args1, GoalsA),
                                                                   flatten(GoalsA,GoalsPrefix)
                                                                 ; Args1 = Args0, GoalsPrefix = [] ),
+                                               asserta(function_metadata(Pred, fun_meta(Args1, BodyExpr))),
                                                ( declared_output_type(F, 'Atom')
                                                  -> GoalsBody = [],
                                                     ExpOut = BodyExpr
@@ -115,34 +121,18 @@ uninstall_function_clauses(Space, Term, Refs) :-
 
 forget_function_provenance(Pred) :-
     findall(Ref,
-            ( translated_from(Ref, Space, [=, [F|_], _]),
+            ( translated_from(Ref, Space, Stored),
+              stored_equation(Stored, [=, [F|_], _]),
               space_pred(Space, F, Pred) ),
             Refs),
     forall(member(Ref, Refs), retractall(translated_from(Ref, _, _))).
 
 %%% Coherent function-type revisions %%%
 
-:- thread_local predeclared_function_type/3.
-
 function_type_annotation_term([':', F, TypeChain], F, TypeChain) :-
     atom(F),
     TypeChain = ['->'|Types],
     Types \= [].
-
-with_predeclared_function_types(Space, Types, Goal) :-
-    setup_call_cleanup(
-        maplist(assert_predeclared_function_type(Space), Types, Refs),
-        Goal,
-        maplist(erase_predeclared_function_type, Refs)).
-
-assert_predeclared_function_type(Space, F-TypeChain, Ref) :-
-    assertz(predeclared_function_type(Space, F, TypeChain), Ref).
-
-erase_predeclared_function_type(Ref) :- catch(erase(Ref), _, true).
-
-predeclared_function_type_variant(Space, F, TypeChain) :-
-    predeclared_function_type(Space, F, Existing),
-    TypeChain =@= Existing, !.
 
 function_type_chains(F, TypeChains) :-
     current_translation_space(Space),
@@ -153,9 +143,7 @@ function_type_chains(Space, F, TypeChains) :-
             catch(match(Space, [':', F, TypeChain], TypeChain, TypeChain),
                   _, fail),
             Live),
-    findall(TypeChain, predeclared_function_type(Space, F, TypeChain), Predeclared),
-    append(Live, Predeclared, All),
-    variant_unique(All, TypeChains).
+    variant_unique(Live, TypeChains).
 
 variant_unique(Items, Unique) :- variant_unique(Items, [], Unique).
 
@@ -216,37 +204,9 @@ source_dependent_closure(Space, [Current|Pending], Seen, Acc, Functions) :-
     append(Direct, Acc, NextAcc),
     source_dependent_closure(Space, Next, [Current|Seen], NextAcc, Functions).
 
-function_metadata(F, present(Metadata)) :-
-    catch(nb_getval(F, Metadata), _, fail), !.
-function_metadata(_, absent).
-
-restore_function_metadata(F, present(Metadata)) :- !,
-    nb_setval(F, Metadata).
-restore_function_metadata(F, absent) :-
-    catch(nb_delete(F), _, true).
-
-snapshot_function_metadata([], []).
-snapshot_function_metadata([F|Functions], [F-State|States]) :-
-    function_metadata(F, State),
-    snapshot_function_metadata(Functions, States).
-
-restore_function_metadata_snapshot([]).
-restore_function_metadata_snapshot([F-State|States]) :-
-    restore_function_metadata(F, State),
-    restore_function_metadata_snapshot(States).
-
-type_revision_plan(Space, Callee, Plan, MetadataSnapshot) :-
+type_revision_plan(Space, Callee, Plan) :-
     source_dependent_closure(Space, Callee, Functions),
-    maplist(function_recompile_entry(Space), Functions, Plan),
-    ( Plan == []
-      -> MetadataSnapshot = []
-      ;  maplist(space_pred(Space), Functions, Predicates),
-         ( Space == '&self'
-           -> findall(Specialization, existing_specialization(_, Specialization), Specs)
-           ; Specs = [] ),
-         append(Predicates, Specs, Symbols0),
-         sort(Symbols0, Symbols),
-         snapshot_function_metadata(Symbols, MetadataSnapshot) ).
+    maplist(function_recompile_entry(Space), Functions, Plan).
 
 function_recompile_entry(Space, F, function(Space, F, Pred, Clauses)) :-
     space_pred(Space, F, Pred),
@@ -266,7 +226,7 @@ compile_source_clauses([_-Term|Clauses], Space) :-
 
 recompile_function(function(Space, _F, Pred, Clauses)) :-
     erase_compiled_clauses(Clauses),
-    (current_predicate(ho_specialization/2) -> nb_setval(Pred, []) ; true),
+    retractall(function_metadata(Pred, _)),
     compile_source_clauses(Clauses, Space),
     metta_on_function_changed(Pred).
 
@@ -295,29 +255,17 @@ apply_type_revision(Space, Plan) :-
         ( ( Space == '&self' -> invalidate_all_specializations ; true ),
           maplist(recompile_function, Plan) )).
 
-restore_type_revision_state(state(snapshot(MetadataSnapshot))) :- !,
-    restore_function_metadata_snapshot(MetadataSnapshot).
-restore_type_revision_state(_).
-
-% Type mutation and dependent recompilation are one database transaction.
-% Non-backtrackable compiler metadata is restored explicitly on failure.
+% Type mutation, dependent recompilation and the compiler metadata facts are
+% one database transaction.
 revise_function_type(Space, F, Mutation) :-
     with_mutex(petta_type_revision,
-        ( State = state(none),
-          catch(
-              ( transaction(
-                    ( function_type_chains(Space, F, Before),
-                      call(Mutation),
-                      function_type_chains(Space, F, After),
-                      ( Before =@= After -> true
-                      ; type_revision_plan(Space, F, Plan, MetadataSnapshot),
-                        nb_setarg(1, State, snapshot(MetadataSnapshot)),
-                        apply_type_revision(Space, Plan) ) ))
-                -> true
-                ;  restore_type_revision_state(State), fail ),
-              Error,
-              ( restore_type_revision_state(State),
-                throw(Error) )) )).
+        transaction(
+            ( function_type_chains(Space, F, Before),
+              call(Mutation),
+              function_type_chains(Space, F, After),
+              ( Before =@= After -> true
+              ; type_revision_plan(Space, F, Plan),
+                apply_type_revision(Space, Plan) ) ))).
 
 %Print compiled clause:
 maybe_print_compiled_clause(_, _, _) :- silent(true), !.
@@ -347,45 +295,68 @@ throw_function_overapplication(Fun, ActualInputArity) :-
     sort(InputArities, KnownInputArities),
     throw(error(domain_error(function_input_arities(Fun, KnownInputArities), ActualInputArity), none)).
 
-% Runtime dispatcher: call F if it's a registered fun/1, else keep as list:
-reduce([F|Args], Out) :- nonvar(F), atom(F), fun(F)
-                         -> % --- Case 1: callable predicate ---
-                            length(Args, N),
-                            Arity is N + 1,
-                            ( current_predicate(F/Arity) , \+ (current_op(_, _, F), Arity =< 2)
-                              -> resolve_memoization(F, Args, Out, Goal),
-                                 catch(call(Goal), _, fail)
-                            ; incomplete_application_kind(F, Arity, partial)
-                              -> Out = partial(F,Args)
-                            ; throw_function_overapplication(F, N) )
-                          ; % --- Case 2: partial closure ---
-                            compound(F), F = partial(Base, Bound) -> append(Bound, Args, NewArgs),
-                                                                     reduce([Base|NewArgs], Out)
-                          ; % --- Case 3: leave unevaluated ---
-                            Out = [F|Args],
-                            \+ cyclic_term(Out).
+% Runtime reduction receives values, not authored argument expressions.
+reduce([Head|Args], Out) :- ready_argument_plans(Args, Plans),
+                          dynamic_call('&self', Head, Plans, Out).
+space_reduce(Space, [Head|Args], Out) :- ready_argument_plans(Args, Plans),
+                                      dynamic_call(Space, Head, Plans, Out).
 
-% Named-space dynamic dispatch receives its owner as a compiled constant.
-space_reduce(Space, [F|Args], Out) :-
-        nonvar(F), atom(F), space_call_target(Space, F, Pred)
-        -> length(Args, N),
-           Arity is N + 1,
-           ( current_predicate(Pred/Arity), \+ (current_op(_, _, Pred), Arity =< 2)
-             -> resolve_memoization(Pred, Args, Out, Goal),
-                catch(call(Goal), _, fail)
-           ; incomplete_application_kind(Pred, Arity, partial)
-             -> Out = partial(Pred, Args)
-           ; throw_function_overapplication(Pred, N) )
-         ; compound(F), F = partial(Base, Bound)
-           -> append(Bound, Args, NewArgs),
-              space_reduce(Space, [Base|NewArgs], Out)
-         ; Out = [F|Args],
-           \+ cyclic_term(Out).
+ready_argument_plans([], []).
+ready_argument_plans([Arg|Args], [argument(Arg, Arg, true)|Plans]) :-
+    ready_argument_plans(Args, Plans).
 
 %Calling reduce from aggregate function foldall needs this argument wrapping
 agg_reduce(AF, Acc, Val, NewAcc) :- reduce([AF, Acc, Val], NewAcc).
 space_agg_reduce(Space, AF, Acc, Val, NewAcc) :-
     space_reduce(Space, [AF, Acc, Val], NewAcc).
+
+% A variable head is resolved before selecting its argument policy. Keep the
+% authored argument and its already translated continuation together: Atom
+% holds that source, while other types run the continuation. A variable's
+% value has a true continuation, so a value shaped like a call is never run
+% again merely because the head was discovered at runtime.
+dynamic_argument_plans([], []).
+dynamic_argument_plans([Arg|Args], [argument(Arg, Value, Goal)|Plans]) :-
+    translate_expr(Arg, Goals, Value), goals_list_to_conj(Goals, Goal),
+    dynamic_argument_plans(Args, Plans).
+
+dynamic_arguments([], _, []).
+dynamic_arguments([argument(Source, Value, Goal)|Plans], [Type|Types], [Arg|Args]) :-
+    ( Type == 'Atom' -> Arg = Source
+    ; call(Goal), Arg = Value,
+      ( (Type == '%Undefined%' ; Type == '_') -> true
+      ; type_guard_goal(Arg, Type, Guard), call(Guard) ) ),
+    dynamic_arguments(Plans, Types, Args).
+dynamic_arguments([argument(_, Value, Goal)|Plans], untyped, [Value|Args]) :-
+    call(Goal), dynamic_arguments(Plans, untyped, Args).
+
+dynamic_target(Head, Pred, Bound) :- nonvar(Head), Head = partial(Base, Bound),
+    atom(Base), is_list(Bound), !,
+    current_translation_space(Space),
+    (space_call_target(Space, Base, Pred) -> true ; atom(Base), fun(Base), Pred = Base).
+dynamic_target(Head, Pred, []) :- atom(Head), callable_fun(Head, Pred).
+
+dynamic_call(Space, Head, Plans, Out) :-
+    with_translation_space(Space, dynamic_call(Head, Plans, Out)).
+dynamic_call(Head, Plans, Out) :-
+    ( dynamic_target(Head, Pred, Bound)
+      -> pred_type_chains(Pred, Chains),
+         ( Chains == []
+           -> dynamic_arguments(Plans, untyped, Args), append(Bound, Args, All),
+              run_dynamic_application(Pred, All, Out, [])
+           ; member(['->'|Types], Chains), append(ArgTypes, [ResultType], Types),
+             same_length(Bound, BoundTypes), append(BoundTypes, RemainingTypes, ArgTypes),
+             maplist(dynamic_bound_argument, Bound, BoundTypes),
+             dynamic_arguments(Plans, RemainingTypes, Args), append(Bound, Args, All),
+             ( (ResultType == '%Undefined%' ; ResultType == '_' ; ResultType == 'Atom')
+               -> Extra = []
+                ; type_guard_goal(Out, ResultType, Guard), Extra = [Guard] ),
+             run_dynamic_application(Pred, All, Out, Extra) )
+       ; dynamic_arguments(Plans, untyped, Args), Out = [Head|Args], \+ cyclic_term(Out) ).
+
+dynamic_bound_argument(Value, Type) :-
+    ( (Type == 'Atom' ; Type == '%Undefined%' ; Type == '_') -> true
+    ; type_guard_goal(Value, Type, Guard), call(Guard) ).
 
 %Combined expr translation to goals list
 translate_expr_to_conj(Input, Conj, Out) :- translate_expr(Input, Goals, Out),
@@ -424,6 +395,7 @@ translate_expr([H0|T0], Goals, Out) :-
                                                   append(ArgTypes, [_], Xs),
                                                   translate_args_by_type(T, ArgTypes, GsT, T1)
                                                 ; translate_args(T, GsT, T1) ),
+                                             note_translated_call(HV),
                                              append(T1,[Gs],Args),
                                              HookCall =.. [HV|Args],
                                              call(HookCall),
@@ -582,7 +554,8 @@ translate_expr([H0|T0], Goals, Out) :-
                                            current_translation_space(LambdaSpace),
                                            space_pred(LambdaSpace, F, LambdaPred),
                                            register_fun(LambdaPred),
-                                           assertz(Clause),
+                                           assertz(Clause, LambdaRef),
+                                           assertz(translated_from(LambdaRef, LambdaSpace, lambda([=, [F|FullArgs], Body]))),
                                            format(atom(Label), "metta lambda (~w)", [LambdaPred]),
                                            maybe_print_compiled_clause(Label, ['|->', Args, Body], Clause),
                                            length(FullArgs, N),
@@ -654,6 +627,10 @@ translate_expr([H0|T0], Goals, Out) :-
                        (Exception = error(Type, Ctx) -> Out = ['Error', Type, Ctx]
                                                       ; Out = ['Error', Exception])),
           append(Inner, [Goal], Goals)
+        % A variable head needs its live declaration before arguments run.
+        ; var(HV) -> current_translation_space(CallSpace),
+                     dynamic_argument_plans(T, Plans),
+                     append(GsH, [dynamic_call(CallSpace, HV, Plans, Out)], Goals)
         %--- Automatic 'smart' dispatch, translator deciding when to create a predicate call, data list, or dynamic dispatch: ---
         ; translate_args(T, GsT, AVs),
           append(GsH, GsT, Inner),
@@ -663,6 +640,7 @@ translate_expr([H0|T0], Goals, Out) :-
             ; compound(HV), HV = partial(Fun, Bound), append(Bound,AVs,AllAVs), IsPartial = true
             ) % Check for type definition [:,HV,TypeChain]
             -> pred_type_chains(Fun, UniqueTypeChains),
+               note_translated_call(Fun),
                ( UniqueTypeChains \= []
                  -> length(AllAVs, InputArity),
                     Arity is InputArity + 1,
@@ -685,18 +663,24 @@ translate_expr([H0|T0], Goals, Out) :-
           ; reduce_goal([HV|AVs], Out, ReduceGoal),
             append(Inner, [ReduceGoal], Goals) )).
 
-%Generate actual function call or partial if arity not complete:
-build_call_or_partial(Fun, AVs, Out, Inner, Extra, Goals) :- length(AVs, N),
-                                                             Arity is N + 1,
-                                                             ( arity(Fun, Arity)
-                                                               -> resolve_memoization(Fun, AVs, Out, Goal),
-                                                                  append(Inner, [Goal|Extra], Goals)
-                                                                ; incomplete_application_kind(Fun, Arity, partial)
-                                                               -> Out = partial(Fun, AVs),
-                                                                  % A closure is not the completed call's result.
-                                                                  Goals = Inner
-                                                                ; append(Inner, [throw_function_overapplication(Fun, N)], Goals)
-                                                             ).
+% Compiler and runtime share the arity decision. Only invocation is caught
+% by dynamic reduction; an overapplication keeps its explicit domain error.
+application_plan(Fun, Args, Out, Plan) :- length(Args, N), Arity is N + 1,
+    ( arity(Fun, Arity) -> resolve_memoization(Fun, Args, Out, Goal), Plan = invoke(Goal)
+    ; incomplete_application_kind(Fun, Arity, partial) -> Plan = value(partial(Fun, Args))
+    ; Plan = overapplied(Fun, N) ).
+
+build_call_or_partial(Fun, Args, Out, Inner, Extra, Goals) :-
+    application_plan(Fun, Args, Out, Plan),
+    ( Plan = invoke(Goal) -> append(Inner, [Goal|Extra], Goals)
+    ; Plan = value(Value) -> Out = Value, Goals = Inner
+    ; Plan = overapplied(F, N), append(Inner, [throw_function_overapplication(F, N)], Goals) ).
+
+run_dynamic_application(Fun, Args, Out, Extra) :-
+    application_plan(Fun, Args, Out, Plan),
+    ( Plan = invoke(Goal) -> catch(call(Goal), _, fail), call_goals(Extra)
+    ; Plan = value(Value) -> Out = Value
+    ; Plan = overapplied(F, N), throw_function_overapplication(F, N) ).
 
 %Type function call generation, returns function call plus typechecks for input and output:
 typed_functioncall_branch(Fun, TypeChain, T, GsH, IsPartial, Bound, Out, BranchGoal) :-
@@ -726,6 +710,103 @@ translate_args_by_type([A|As], [T|Ts], GsOut, [AV|AVs]) :-
                                                   append(GsA1, [ArgGuard], GsA))),
                                              translate_args_by_type(As, Ts, GsRest, AVs),
                                              append(GsA, GsRest, GsOut).
+
+%%% Arrow declarations that change after the equations they decide were translated: %%%
+:- dynamic translated_call/1.
+
+%The arrow declarations of Fun, as the translator reads them (including the
+%ones a file being loaded predeclares):
+arrow_declarations(Fun, TypeChains) :- function_type_chains('&self', Fun, TypeChains).
+
+%Remember that a call to Fun has been translated, so that a change to its declarations looks for the callers:
+note_translated_call(Fun) :- ( translated_call(Fun) -> true ; assertz(translated_call(Fun)) ).
+
+%Change arrow declarations of Funs by Mutation. The stored equations they decide are translated again in the
+%same transaction. An equation that is already running finishes as it was translated, as it does when an
+%equation is added or removed; what is called afterwards, also from that equation, runs the new clauses.
+%If a stored equation cannot be translated with the new declarations, nothing changes and this fails.
+%Nothing follows for a symbol that no stored equation depends on yet, such as a data constructor or a
+%function declared before it is defined:
+revise_arrow_declarations(Funs, Mutation) :-
+    ( member(Fun, Funs), decides_stored_equations(Fun)
+      -> with_mutex(arrow_declarations,
+                    transaction(( maplist(arrow_declarations, Funs, Befores),
+                                  call(Mutation),
+                                  maplist(arrow_declarations_revised, Funs, Befores) )))
+       ; call(Mutation) ).
+
+decides_stored_equations(Fun) :- translated_call(Fun), !.
+decides_stored_equations(Fun) :- fun(Fun), ( existing_specialization(Fun, _) ; stored_clause(Fun, _, _, _) ), !.
+
+%The clauses of Fun that were translated from stored equations, in clause order:
+stored_clause(Fun, Arity, Ref, Stored) :- findall(Known, arity(Fun, Known), Arities),
+                                          sort(Arities, Compiled),
+                                          member(Arity, Compiled),
+                                          current_predicate(Fun/Arity),
+                                          functor(Head, Fun, Arity),
+                                          catch(clause(Head, _, Ref), _, fail),
+                                          translated_from(Ref, Stored).
+
+%Before is what the translator read for Fun. If it reads something else now, the stored equations those
+%declarations decide are translated again: Fun's own (an Atom result holds the body), those of its
+%specializations, and those that mention Fun:
+arrow_declarations_revised(Fun, Before) :-
+    arrow_declarations(Fun, After),
+    ( Before =@= After
+      -> true
+       ; findall(Spec, existing_specialization(Fun, Spec), Specs),
+         forall(member(Spec, Specs), ( retractall('&self'(:, Spec, _)),
+                                       forall(match('&self', [':', Fun, TypeChain], TypeChain, TypeChain),
+                                              add_sexp('&self', [':', Spec, TypeChain])) )),
+         ( translated_call(Fun) -> findall(Caller, stored_equation_mentions(Caller, Fun), Callers)
+                                 ; Callers = [] ),
+         append([[Fun], Specs, Callers], Functions),
+         sort(Functions, Affected),
+         maplist(retranslate_function, Affected) ).
+
+%Stored equations are those of functions, of their specializations, and of anonymous functions:
+stored_equation(lambda(Equation), Equation) :- !.
+stored_equation(Equation, Equation).
+
+stored_equation_mentions(Caller, Fun) :- translated_from(_, Stored),
+                                         stored_equation(Stored, [=, [Caller|Args], Body]),
+                                         atom(Caller),
+                                         source_mentions([Args|Body], Fun).
+
+source_mentions(Term, Atom) :- Term == Atom, !.
+source_mentions(Term, Atom) :- nonvar(Term), Term = [Part|Rest],
+                               ( source_mentions(Part, Atom) -> true ; source_mentions(Rest, Atom) ).
+source_mentions(Term, Atom) :- nonvar(Term), Term = partial(Base, Bound),
+                               ( source_mentions(Base, Atom) -> true ; source_mentions(Bound, Atom) ).
+
+%Translate the stored equations of Fun again, in place and in clause order:
+retranslate_function(Fun) :-
+    findall(stored(Arity, Ref, Stored), stored_clause(Fun, Arity, Ref, Stored), Clauses),
+    ( Clauses == []
+      -> true
+       ; retractall(function_metadata(Fun, _)),
+         ( existing_specialization(_, Fun) -> ConstrainArgs = false ; ConstrainArgs = true ),
+         forall(member(stored(_, Ref, Stored), Clauses), retranslate_clause(ConstrainArgs, Ref, Stored)),
+         forget_unused_arities(Fun, Clauses),
+         forall(metta_on_function_changed(Fun), true) ).
+
+retranslate_clause(ConstrainArgs, Ref, Stored) :- stored_equation(Stored, Equation),
+                                                  once(translate_clause(Equation, Clause, ConstrainArgs)),
+                                                  erase(Ref),
+                                                  retractall(translated_from(Ref, _, _)),
+                                                  assertz(Clause, New),
+                                                  assertz(translated_from(New, '&self', Stored)).
+
+%An arity that only the earlier translation compiled to, as for a body that was a partial application, goes:
+forget_unused_arities(Fun, Clauses) :-
+    forall(( member(stored(Arity, _, _), Clauses),
+             \+ ( member(stored(_, _, Stored), Clauses),
+                  stored_equation(Stored, [=, [_|Args], _]),
+                  length(Args, N),
+                  Arity =:= N + 1 ),
+             functor(Head, Fun, Arity),
+             \+ clause(Head, _) ),
+           retractall(arity(Fun, Arity))).
 
 %Handle data list:
 eval_data_term(X, [], X) :- (var(X); atomic(X)), !.
