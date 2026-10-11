@@ -1112,6 +1112,7 @@ translate_typed_call(Fun, Bound, Args, GsH, Goals, Out) :-
         findall(ft(ATs, OT), fn_decl_arity(Fun, NTotal, ATs, OT), FullDecls),
         ( FullDecls \== []
           -> eff_arg_types(FullDecls, NB, NProv, EffTs),
+             contextual_lambda_params(FullDecls, NB, Args),
              translate_typed_args(Fun, FullDecls, Args, EffTs, GsT, AVs0),
              append(Bound, AVs0, AVs),
              ( FullDecls = [Single] -> Chosen = Single, MultiDecl = false
@@ -1165,6 +1166,30 @@ translate_typed_call(Fun, Bound, Args, GsH, Goals, Out) :-
           append(GsH, GsT, Inner),
           build_call_or_partial(Fun, AVs, AVs, Out, Inner, [], Goals),
           ( untyped_call_out(Fun, AVs, Out) -> true ; true ) ).
+
+%A lambda written directly in an arrow position of a unique declaration takes
+%its parameter types from that declaration. The callee is checked against the
+%declaration, so it calls the lambda only with those types: the parameters are
+%known, not inference assumptions. A wildcard position says nothing.
+contextual_lambda_params([ft(ATs, _)], NB, Args) :- !,
+        length(BoundTs, NB),
+        ( append(BoundTs, ProvidedTs, ATs), same_length(ProvidedTs, Args)
+          -> maplist(contextual_lambda_param_types, Args, ProvidedTs)
+        ; true ).
+contextual_lambda_params(_, _, _).
+
+contextual_lambda_param_types(A, T) :-
+        ( nonvar(A), A = [L, Params, _], L == '|->', is_list(Params),
+          is_arrow_type(T), T = [_|Ts], append(ParamTs, [_], Ts),
+          same_length(Params, ParamTs)
+          -> maplist(contextual_lambda_param, Params, ParamTs)
+        ; true ).
+
+contextual_lambda_param(P, T) :-
+        ( var(P), \+ get_attr(P, tknown, _),
+          ( var(T) ; \+ wildcard_type(T) )
+          -> add_known_type(P, T)
+        ; true ).
 
 %At a uniquely declared call site, closure arguments first resolve shared type
 %variables in the declaration, so a remaining product/list argument can get
@@ -1328,7 +1353,7 @@ overload_out_guard(MultiDecl, Fun, Out, OT, Extra) :- ( MultiDecl == true, groun
                                                               ; Extra = [typecheck_match(Out, OT)] )
                                                          ; Extra = [] ).
 
-overload_branch_guard(Fun, AV, T, G) :- ( arg_statically_ok(AV, T) -> G = []
+overload_branch_guard(Fun, AV, T, G) :- ( arg_statically_ok(AV, T), \+ assumption_backed_arg(Fun, AV, T) -> G = []
                                         ; strict_mode(true)
                                           -> throw(error(strict_runtime_typecheck(Fun, typecheck_match(AV, T)), typecheck))
                                         ; trusted_guard_waiver(Fun)

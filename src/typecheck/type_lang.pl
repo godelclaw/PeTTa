@@ -97,6 +97,11 @@ mreq:attr_unify_hook(Rs, Other) :-
 proper_list_cert:attr_unify_hook(true, Other) :-
     ( var(Other) -> put_attr(Other, proper_list_cert, true) ; true ).
 
+%An undeclared function's parameter typed by an inference assumption
+%(mark_assumed_param/1):
+assumed_param:attr_unify_hook(true, Other) :-
+    ( var(Other) -> put_attr(Other, assumed_param, true) ; true ).
+
 variant_union([], Ys, Ys).
 variant_union([X|Xs], Ys, U) :- ( variant_member(X, Ys) -> variant_union(Xs, Ys, U)
                                                          ; variant_union(Xs, [X|Ys], U) ).
