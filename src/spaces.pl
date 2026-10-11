@@ -1,12 +1,27 @@
 %Since both normal add-attom call and function additions needs to add the S-expression:
 add_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
-                               assertz(Term),
-                               maybe_cache_type_decl(Space, [Rel|Args]).
+                               ( Rel == (:)
+                                 -> assertz(Term, Ref),
+                                    %a declaration the stored program cannot be compiled
+                                    %with is refused, and its atom does not stay behind:
+                                    catch(( maybe_cache_type_decl(Space, [Rel|Args]) -> true
+                                          ; erase(Ref), fail ),
+                                          Error,
+                                          ( erase(Ref), throw(Error) ))
+                                 ; assertz(Term),
+                                   maybe_cache_type_decl(Space, [Rel|Args]) ).
 
 %Same but for removal:
 remove_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
-                                  retractall(Term),
-                                  maybe_uncache_type_decl(Space, [Rel|Args]).
+                                  ( Rel == (:)
+                                    -> findall(Term, clause(Term, true), Removed),
+                                       retractall(Term),
+                                       catch(( maybe_uncache_type_decl(Space, [Rel|Args]) -> true
+                                             ; maplist(assertz, Removed), fail ),
+                                             Error,
+                                             ( maplist(assertz, Removed), throw(Error) ))
+                                    ; retractall(Term),
+                                      maybe_uncache_type_decl(Space, [Rel|Args]) ).
 
 %Add a function atom. On failure or exception it rolls back its staged raw
 %atom, registration, metadata and compiled-dependency state; concurrent
@@ -180,6 +195,17 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
                                        % unknown function call.
                                        notify_mutation(clause_changed(Pred/N, runtime)),
                                        ( Refs = [] -> Removed = false ; Removed = true ).
+
+%A pattern over type declarations removes each matching declaration exactly,
+%so its cached form and the code compiled against it follow:
+'remove-atom'(Space, Term, true) :-
+    Space == '&self', nonvar(Term), Term = [C, _, _], C == (:), \+ ground(Term), !,
+    findall(Match, ( copy_term(Term, Match), Match = [_, Name, Type],
+                     Atom =.. [Space, (:), Name, Type],
+                     catch(Atom, _, fail) ),
+            Matches),
+    with_decl_notifications_batched(
+        forall(member(Match, Matches), remove_sexp(Space, Match))).
 
 %Remove all same atoms:
 'remove-atom'(Space, Term, true) :-
