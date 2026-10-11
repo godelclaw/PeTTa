@@ -439,8 +439,9 @@ translate_args([X|Xs], Goals, [V|Vs]) :- translate_expr(X, G1, V),
                                          append(G1, G2, Goals).
 
 %Build A ; B ; C ... from a list:
+disj_list([], fail).
 disj_list([G], G).
-disj_list([G|Gs], (G ; R)) :- disj_list(Gs, R).
+disj_list([G,H|Gs], (G ; R)) :- disj_list([H|Gs], R).
 
 %Build one disjunct per branch: (Conj, Out = Val):
 build_superpose_branches([], _, []).
