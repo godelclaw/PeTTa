@@ -6,12 +6,11 @@ add_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
 remove_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
                                   retractall(Term).
 
-%Arrow declarations alter the code emitted for stored functions.
-'add-atom'(Space, Term, true) :- atom(Space),
-                                 function_type_annotation_term(Term, F, TypeChain), !,
-                                 ( predeclared_function_type_variant(Space, F, TypeChain)
-                                   -> add_sexp(Space, Term)
-                                   ; revise_function_type(Space, F, add_sexp(Space, Term)) ).
+%Arrow declarations alter the code emitted for a named space's stored functions
+%(&self's are revised by revise_arrow_declarations/2 below).
+'add-atom'(Space, Term, true) :- atom(Space), Space \== '&self',
+                                 function_type_annotation_term(Term, F, _), !,
+                                 revise_function_type(Space, F, add_sexp(Space, Term)).
 
 %Add a function atom to its owner's compiled program:
 'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(Space), atom(FAtom), !,
@@ -27,25 +26,23 @@ remove_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
                                  ; clause(Head, Body, Ref),
                                    maybe_print_compiled_clause("added function", Term, (Head :- Body)) ).
 
+%Add an arrow declaration, which changes how calls to its function are translated:
+'add-atom'(Space, Term, true) :- is_arrow_declaration(Space, Term, Fun), !,
+                                 revise_arrow_declarations([Fun], add_sexp(Space, Term)).
+
 %Add an atom to the space:
 'add-atom'(Space, Term, true) :- add_sexp(Space, Term).
 
-'remove-atom'(Space, Term, true) :- atom(Space),
-                                    function_type_annotation_term(Term, F, TypeChain), !,
-                                    revise_function_type(
-                                        Space, F,
-                                        ( retractall(predeclared_function_type(Space, F, TypeChain)),
-                                          remove_sexp(Space, Term) )).
+'remove-atom'(Space, Term, true) :- atom(Space), Space \== '&self',
+                                    function_type_annotation_term(Term, F, _), !,
+                                    revise_function_type(Space, F, remove_sexp(Space, Term)).
 
 %%Remove a function atom:
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body],
                                        atom(Space), atom(F), !,
                                        remove_sexp(Space, Term),
                                        space_pred(Space, F, Pred),
-                                       catch(nb_getval(Pred, Prev), _, Prev = []),
-                                       (   select(fun_meta(Args, Body), Prev, Rest)
-                                           -> ( Rest == [] -> nb_delete(Pred)
-                                                            ; nb_setval(Pred, Rest) ) ; true ),
+                                       ( retract(function_metadata(Pred, fun_meta(Args, Body))) -> true ; true ),
                                        uninstall_function_clauses(Space, Term, Refs),
                                        metta_on_function_changed(Pred),
                                        invalidate_specializations(Pred),
@@ -56,8 +53,23 @@ remove_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
                                          ; true ),
                                        ( Refs = [] -> Removed = false ; Removed = true ).
 
+%Remove the type atoms matching a pattern, which may be arrow declarations of several functions:
+'remove-atom'(Space, Term, true) :- Space == '&self', nonvar(Term), Term = [Colon, _, _], Colon == ':', !,
+                                    findall(Fun, ( copy_term(Term, [_, Fun, TypeChain]),
+                                                   catch('&self'(:, Fun, TypeChain), _, fail),
+                                                   is_arrow_declaration(Space, [':', Fun, TypeChain], Fun) ), Funs0),
+                                    sort(Funs0, Funs),
+                                    ( Funs == [] -> remove_sexp(Space, Term)
+                                                  ; revise_arrow_declarations(Funs, remove_sexp(Space, Term)) ).
+
 %Remove all same atoms:
 'remove-atom'(Space, Term, true) :- remove_sexp(Space, Term).
+
+%Recognize (: Fun (-> ...)) in the space whose declarations the translator reads:
+is_arrow_declaration(Space, Term, Fun) :- Space == '&self',
+                                          nonvar(Term), Term = [Colon, Fun, TypeChain], Colon == ':',
+                                          atom(Fun),
+                                          nonvar(TypeChain), TypeChain = [Arrow|_], Arrow == '->'.
 
 %Match for conjunctive pattern
 match(_, LComma, OutPattern, Result) :- LComma == [','], !,
