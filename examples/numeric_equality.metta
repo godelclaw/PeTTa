@@ -21,6 +21,16 @@
 (= (row $n $x) (if (== $n 0) () (cons-atom $x (row (- $n 1) $x))))
 !(test (== (row 2000 1) (row 2000 1.0)) true)
 
+; A compiled if condition gives == and != the same meaning.
+!(test (if (== 1 1.0) yes no) yes)
+!(test (if (!= 1 1.0) yes no) no)
+!(test (if (== (a 1) (a 1.0)) yes no) yes)
+!(test (if (== 1 2) yes no) no)
+!(test (if (!= a b) yes no) yes)
+(= (one-again $x) (if (== $x 1) (if (== $x 1.0) same different) other))
+!(test (one-again 1.0) same)
+!(test (one-again 1) same)
+
 ; Variables compare by identity and are never bound.
 !(test (== $x $x) true)
 !(test (== $x $y) false)
@@ -40,10 +50,13 @@
 !(test (let $_ (translatePredicate (is $n nan)) (== $n 1.0)) false)
 !(test (let $_ (translatePredicate (is $n nan)) (!= $n $n)) false)
 
-; Rationals compare exactly with floats.
-!(test (let $_ (translatePredicate (set_prolog_flag prefer_rationals true)) (== (/ 1 2) 0.5)) true)
+; Rationals compare exactly with floats. The flag gets its own statement, so it
+; is set before the arithmetic of the next statement.
+!(translatePredicate (set_prolog_flag prefer_rationals true))
+!(test (== (/ 1 2) 0.5) true)
 !(test (== (/ 1 3) 0.3333333333333333) false)
-!(test (let $_ (translatePredicate (set_prolog_flag prefer_rationals false)) (/ 1 2)) 0.5)
+!(translatePredicate (set_prolog_flag prefer_rationals false))
+!(test (/ 1 2) 0.5)
 
 ; Cyclic terms compare by their unfolding, with the same rules, and the comparison ends.
 !(test (let $_ (translatePredicate (= $c (f $c))) (== $c $c)) true)

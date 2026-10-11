@@ -1360,8 +1360,9 @@ cmp_native('<', A, B, (A < B)).
 cmp_native('<=', A, B, (A =< B)).
 cmp_native('>', A, B, (A > B)).
 cmp_native('>=', A, B, (A >= B)).
-cmp_native('==', A, B, (A == B)).
-cmp_native('!=', A, B, (A \== B)).
+%== and != compare numbers by value (metta.pl); identity is only their fast path:
+cmp_native('==', A, B, (A == B -> true ; '=='(A, B, true))).
+cmp_native('!=', A, B, (A == B -> fail ; '=='(A, B, false))).
 
 %Generate actual function call or partial if arity not complete:
 build_call_or_partial(Fun, AVs, Out, Inner, Extra, Goals) :- ( maybe_specialize_call(Fun, AVs, Out, Goal)

@@ -604,15 +604,19 @@ pattern_node(value(_, pattern_var(_))).
 pattern_node(value(_, source_var)).
 pattern_node(value(_, literal(_))).
 
+%== compares numbers by value (metta.pl): 1 equals 1.0, at any depth. Success
+%therefore pins the other operand only to a literal without numbers, where value
+%and identity agree, and never aliases two operands that might hold numbers.
 refine_identical_success(A, B, State0, Flow) :-
-    ( id_literal(State0, A, Value)
+    ( id_literal(State0, A, Value), number_free_literal(Value)
       -> literal_facts(Value, Facts),
          add_facts_flow(reachable(State0), B, Facts, Flow)
-    ; id_literal(State0, B, Value)
+    ; id_literal(State0, B, Value), number_free_literal(Value)
       -> literal_facts(Value, Facts),
          add_facts_flow(reachable(State0), A, Facts, Flow)
-    ; alias_ids_without_types(State0, A, B, State),
-      consistent_flow(State, Flow) ).
+    ; Flow = reachable(State0) ).
+
+number_free_literal(Value) :- \+ ( sub_term(N, Value), number(N) ).
 
 refine_disequality(A, B, State0, Flow) :-
     ( id_literal(State0, A, Value)
