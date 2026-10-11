@@ -80,7 +80,12 @@ argument it *can* see is definitely mismatched still fails, at the call site's
 guard, because inference already elided the checks inside the callee
 (`examples/fail_inferred_literal_mismatch.metta`). Declared types are
 unaffected — they are checked, and rejected, exactly as before
-(`examples/fail_declared_sentinel_param.metta`).
+(`examples/fail_declared_sentinel_param.metta`). That holds when the argument is
+an undeclared function's own parameter, too: its inferred type was demanded of
+nobody, so it proves nothing, and the call keeps its check. A lambda written
+directly in an arrow position of a declaration is typed by that declaration,
+since the callee is checked to call it only with the declared types
+(`examples/inferred_param_declared_callee.metta`).
 
 A variable bound by a *destructuring* head pattern is a parameter too, and is
 inferred the same way: `(= (tvf (stv $s $c)) (* $s $c))` infers `(-> (stv
