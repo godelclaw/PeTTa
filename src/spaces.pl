@@ -25,10 +25,6 @@ remove_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
 %%Remove a function atom:
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body], !,
                                        remove_sexp(Space, Term),
-                                       catch(nb_getval(F, Prev), _, Prev = []),
-                                       (   select(fun_meta(Args, Body), Prev, Rest)
-                                           -> ( Rest == [] -> nb_delete(F)
-                                                            ; nb_setval(F, Rest) ) ; true ),
                                        findall(Ref, translated_from(Ref, Term), Refs),
                                        forall(member(Ref, Refs), erase(Ref)),
                                        retractall(translated_from(_, Term)),

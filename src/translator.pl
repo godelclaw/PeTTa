@@ -20,8 +20,6 @@ translate_clause(Input, (Head :- BodyConj), ConstrainArgs) :-
                                                ( ConstrainArgs -> maplist(constrain_args, Args0, Args1, GoalsA),
                                                                   flatten(GoalsA,GoalsPrefix)
                                                                 ; Args1 = Args0, GoalsPrefix = [] ),
-                                               catch(nb_getval(F, Prev), _, Prev = []),
-                                               nb_setval(F, [fun_meta(Args1, BodyExpr) | Prev]),
                                                ( declared_output_type(F, 'Atom')
                                                  -> GoalsBody = [],
                                                     ExpOut = BodyExpr
