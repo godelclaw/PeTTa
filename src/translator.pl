@@ -368,15 +368,14 @@ translate_expr([H0|T0], Goals, Out) :-
 %Generate actual function call or partial if arity not complete:
 build_call_or_partial(Fun, AVs, Out, Inner, Extra, Goals) :- length(AVs, N),
                                                              Arity is N + 1,
-                                                             ( maybe_specialize_call(Fun, AVs, Out, Goal)
-                                                               -> append(Inner, [catch(call(Goal), _, fail)|Extra], Goals)
-                                                                ; arity(Fun, Arity)
-                                                                  -> resolve_memoization(Fun, AVs, Out, Goal),
-                                                                     append(Inner, [Goal|Extra], Goals)
+                                                             ( arity(Fun, Arity)
+                                                               -> resolve_memoization(Fun, AVs, Out, Goal),
+                                                                  append(Inner, [Goal|Extra], Goals)
                                                                 ; incomplete_application_kind(Fun, Arity, partial)
-                                                                  -> Out = partial(Fun, AVs),
-                                                                     append(Inner, Extra, Goals)
-                                                                   ; append(Inner, [throw_function_overapplication(Fun, N)], Goals) ).
+                                                               -> Out = partial(Fun, AVs),
+                                                                  append(Inner, Extra, Goals)
+                                                                ; append(Inner, [throw_function_overapplication(Fun, N)], Goals)
+                                                             ).
 
 %Type function call generation, returns function call plus typechecks for input and output:
 typed_functioncall_branch(Fun, TypeChain, T, GsH, IsPartial, Bound, Out, BranchGoal) :-
@@ -474,8 +473,8 @@ next_lambda_name(Name) :- ( catch(nb_getval(lambda_counter, Prev), _, Prev = 0) 
                           format(atom(Name), 'lambda_~d', [N]).
 
 declared_output_type(F, OutType) :- atom(F),
-									nonvar(OutType),
-									catch(match('&self', [':', F, TypeChain], TypeChain, TypeChain), _, fail),
-									TypeChain = [->|Types],
-									append(_, [DeclaredOutType], Types),
-									DeclaredOutType == OutType.
+                                    nonvar(OutType),
+                                    catch(match('&self', [':', F, TypeChain], TypeChain, TypeChain), _, fail),
+                                    TypeChain = [->|Types],
+                                    append(_, [DeclaredOutType], Types),
+                                    DeclaredOutType == OutType.
