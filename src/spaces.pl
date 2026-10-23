@@ -41,13 +41,25 @@ remove_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
 %Remove all same atoms:
 'remove-atom'(Space, Term, true) :- remove_sexp(Space, Term).
 
+% A space is a predicate per row arity, created by the first add-atom. Reading
+% a space before it is written calls an undefined predicate, and every such
+% call would search the autoloader before failing. The first call declares the
+% space's predicate dynamic instead, so later reads are plain calls on an empty
+% predicate; reads of existing spaces pay nothing extra.
+space_call(Term) :- catch(Term, E, space_missing(E, Term)).
+
+space_missing(error(existence_error(procedure, Space/Arity), _), Term) :-
+    functor(Term, Space, Arity), !,
+    dynamic(Space/Arity),
+    fail.
+
 %Match for conjunctive pattern
 match(_, LComma, OutPattern, Result) :- LComma == [','], !,
                                         Result = OutPattern.
 match(Space, [Comma|[Head|Tail]], OutPattern, Result) :- Comma == ',', !,
                                                          append([Space], Head, List),
                                                          Term =.. List,
-                                                         catch(Term, _, fail),
+                                                         space_call(Term),
                                                          \+ cyclic_term(OutPattern),
                                                          match(Space, [','|Tail], OutPattern, Result).
 
@@ -59,7 +71,7 @@ match(Space, PatternVar, OutPattern, Result) :- var(PatternVar), !,
 
 %Match for pattern:
 match(Space, [Rel|PatArgs], OutPattern, Result) :- Term =.. [Space, Rel | PatArgs],
-                                                   catch(Term, _, fail),
+                                                   space_call(Term),
                                                    \+ cyclic_term(OutPattern),
                                                    Result = OutPattern.
 
