@@ -403,8 +403,12 @@ importer_helper(Space, File) :-
 %%% Registration: %%%
 :- dynamic fun/1, arity/2.
 register_fun(N) :- fun(N), !.
+%Arities are registered in ascending order: the order current_predicate/1
+%enumerates them in depends on how many atoms the process created before.
 register_fun(N) :- assertz(fun(N)),
-                   forall((current_predicate(N/Arity), \+ (current_op(_, _, N), Arity =< 2)),
+                   findall(Arity, (current_predicate(N/Arity), \+ (current_op(_, _, N), Arity =< 2)), Arities0),
+                   sort(Arities0, Arities),
+                   forall(member(Arity, Arities),
                           (arity(N, Arity) -> true ; assertz(arity(N, Arity)))).
 :- maplist(register_fun, [superpose, empty, let, 'let*', '+','-','*','/', '%', min, max, 'change-state!', 'get-state', 'bind!',
                           '<','>','@<', '@>', '==', '!=', '=', '=?', '<=', '>=', '@<=', '@>=', and, or, xor, implies, not, sqrt, exp, log, cos, sin,
