@@ -195,8 +195,7 @@ translate_expr([H0|T0], Goals, Out) :-
                                                        translate_case(NormalCases, Kv, Out, CaseGoal, KeyGoal),
                                                        translate_expr_to_conj(DefaultExpr, ConD, DOut),
                                                        build_branch(ConD, DOut, Out, DefaultThen),
-                                                       Combined = ( (GkConj, CaseGoal) ;
-                                                                    \+ GkConj, DefaultThen ),
+                                                       case_with_empty(GkConj, CaseGoal, DefaultThen, Combined),
                                                        append([GsH, KeyGoal, [Combined]], Goals)
                                                      ; translate_expr(KeyExpr, Gk, Kv),
                                                        translate_case(PairsExpr, Kv, Out, IfGoal, KeyGoal),
@@ -478,3 +477,11 @@ declared_output_type(F, OutType) :- atom(F),
                                     TypeChain = [->|Types],
                                     append(_, [DeclaredOutType], Types),
                                     DeclaredOutType == OutType.
+
+%The key of a case with an Empty case runs once, and Empty only if the key yields no value. Soft-cut does exactly
+%this, but would make a cut inside the key local to it; so a key containing a cut instead records in a fresh
+%non-backtrackable flag whether it yielded a value, and its cut still commits the clause:
+case_with_empty(GkConj, CaseGoal, DefaultThen, ( GkConj *-> CaseGoal ; DefaultThen )) :- \+ ( sub_term(G, GkConj), G == ! ), !.
+case_with_empty(GkConj, CaseGoal, DefaultThen, ( functor(Seen, seen, 1),
+                                                 ( GkConj, nb_setarg(1, Seen, true), CaseGoal
+                                                 ; arg(1, Seen, S), var(S), DefaultThen ) )).
