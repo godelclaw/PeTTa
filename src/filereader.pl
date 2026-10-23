@@ -43,10 +43,11 @@ claim_source_compile(CanonPath, space_only) :-
 claim_source_compile(CanonPath, compile_functions) :-
     assertz(metta_source_functions_started(CanonPath)).
 
-rethrow_metta_file_error(_, Error) :- Error = error(_, context(_, _)), !,
-                                      throw(Error).
-rethrow_metta_file_error(Filename, error(Type, _)) :- !,
-                                                      throw(error(Type, context(Filename, 'while loading MeTTa file'))).
+%Name the file in an error that carries no context of its own (unbound, or a
+%bare tag such as typecheck). Any other context - context/2, a stack-overflow
+%dict, a predicate indicator - is the thrower's and is rethrown unchanged:
+rethrow_metta_file_error(Filename, error(Type, Context)) :- ( var(Context) ; atom(Context) ), !,
+                                                            throw(error(Type, context(Filename, 'while loading MeTTa file'))).
 rethrow_metta_file_error(_, Error) :- throw(Error).
 
 %Extract function definitions, call invocations, and S-expressions part of &self space:
