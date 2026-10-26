@@ -857,7 +857,8 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                                translate_clause(
                                                    IsolatedLambdaSource, Clause,
                                                    true, LambdaDependencies)),
-                                           register_fun(F),
+                                           %translate_clause records arities; keep the function marker idempotent.
+                                           ( fun(F) -> true ; assertz(fun(F)) ),
                                            assertz(Clause, LambdaRef),
                                            assertz(translated_from(LambdaRef, IsolatedLambdaSource)),
                                            length(FullArgs, N),
@@ -1553,11 +1554,13 @@ hyperpose_runtime(Exprs, Out) :- is_list(Exprs),
 memberchk_eq(V, [H|_]) :- V == H, !.
 memberchk_eq(V, [_|T]) :- memberchk_eq(V, T).
 
-%Generate readable lambda name:
-next_lambda_name(Name) :- ( nb_current(lambda_counter, Prev) -> true ; Prev = 0 ),
+%Generate a readable name, with a shared counter for lambdas compiled in workers:
+next_lambda_name(Name) :- flag(lambda_counter, Prev, Prev + 1),
                           N is Prev + 1,
-                          nb_setval(lambda_counter, N),
-                          format(atom(Name), 'lambda_~d', [N]).
+                          format(atom(Candidate), 'lambda_~d', [N]),
+                          ( ( fun(Candidate) ; current_predicate(Candidate/_) )
+                            -> next_lambda_name(Name)
+                            ; Name = Candidate ).
 
 declared_output_type(F, OutType) :- atom(F),
 									nonvar(OutType),
