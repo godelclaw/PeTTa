@@ -20,7 +20,7 @@ swrite_cleanup(Term) :-
 %no constraint on the value.
 petta_swrite_name:attr_unify_hook(_, _).
 
-%Each term is written straight to a string stream: no code list is built, and
+%Each term is written straight to a string stream, not built as one code list, and
 %every clause commits, so printing leaves no choice point.
 swrite_exp(Var, C0, C)   :- var(Var), !,
                             (   get_attr(Var, petta_swrite_name, N)
@@ -31,9 +31,8 @@ swrite_exp(Var, C0, C)   :- var(Var), !,
                             format("$_~d", [N]).
 swrite_exp(Num, C, C)    :- number(Num), !, write(Num).
 swrite_exp(Str, C, C)    :- string(Str), !, put_char('"'),
-                            string_length(Str, Len),
-                            forall(between(1, Len, I),
-                                   ( string_code(I, Str, Code), swrite_string_code(Code) )),
+                            ( split_string(Str, "\\\"", "", [_]) -> write(Str)
+                            ; string_codes(Str, Cs), escape_quotes(Cs, Es), format("~s", [Es]) ),
                             put_char('"').
 swrite_exp(Atom, C, C)   :- atom(Atom), !, write(Atom).
 swrite_exp([H|T], C0, C) :- \+ is_list([H|T]), !, write('(cons '),
@@ -48,9 +47,10 @@ swrite_seq([Y|Ys], X, C0, C)  :- swrite_exp(X, C0, C1), put_char(' '), swrite_se
 
 swrite_arg(X, C0, C) :- put_char(' '), swrite_exp(X, C0, C).
 
-swrite_string_code(0'\\) :- !, write('\\\\').
-swrite_string_code(0'") :- !, write('\\"').
-swrite_string_code(Code) :- put_code(Code).
+escape_quotes([], []).
+escape_quotes([0'\\|T], [0'\\,0'\\|R]) :- !, escape_quotes(T, R).
+escape_quotes([0'"|T], [0'\\,0'"|R]) :- !, escape_quotes(T, R).
+escape_quotes([H|T], [H|R]) :- escape_quotes(T, R).
 
 %Read S string or atom, extract codes, and apply DCG (parsing):
 sread(S, T) :- ( atom_string(A, S),

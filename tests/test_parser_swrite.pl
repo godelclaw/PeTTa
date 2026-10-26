@@ -79,4 +79,9 @@ test(leaves_no_choice_point) :-
         call_cleanup(swrite(Term, _), Det = true),
         Det == true.
 
+test(string_with_nul_preserves_text, Text == Expected) :-
+        string_codes(Input, [97, 0, 92, 34, 233, 128512]),
+        string_codes(Expected, [34, 97, 0, 92, 92, 92, 34, 233, 128512, 34]),
+        swrite(Input, Text).
+
 :- end_tests(parser_swrite).
