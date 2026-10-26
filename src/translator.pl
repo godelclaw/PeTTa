@@ -869,7 +869,8 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                            (arity(F, Arity) -> true ; assertz(arity(F, Arity))),
                                            % emit closure capturing the environment (free vars)
                                            ( FreeVars == [] -> Out = F
-                                                             ; Out = partial(F, FreeVars) )
+                                                             ; Out = partial(F, FreeVars) ),
+                                           Goals = GsH
         %--- Spaces ---:
         ; special_builtin_form(HV, T, typed_space_update), T = [Space, Atom] ->
                                                                    check_typed_space_value(Space, Atom),
