@@ -12,7 +12,7 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
                            ; must_be(atom, Space), retractall(space_primitive(Space, Atom)) ).
 
 %Add a function atom:
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], !,
+'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
                                  add_sexp(Space, Term),
                                  register_fun(FAtom),
                                  length(W, N),
@@ -27,8 +27,11 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
 %Add an atom to the space:
 'add-atom'(Space, Term, true) :- add_sexp(Space, Term).
 
+%%A removal with an unknown function name must not erase program rows:
+'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
+
 %%Remove a function atom:
-'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body], !,
+'remove-atom'(Space, Term, Removed) :- Term = [=,[F|_],_], atom(F), !,
                                        remove_sexp(Space, Term),
                                        findall(Ref, translated_from(Ref, Term), Refs),
                                        forall(member(Ref, Refs), erase(Ref)),
