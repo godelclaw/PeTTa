@@ -1529,8 +1529,9 @@ collapse_elem_type(EV, ET, Known) :- ( var(EV), known_candidates_certain(EV, Cs)
                                                                                  Known = true
                                      ; Known = false ).
 
-%Build A ; B ; C ... from a list:
-disj_list([G], G).
+%Build A ; B ; C ... from a proper list into a fresh output goal:
+disj_list([], fail).
+disj_list([G], G) :- !.
 disj_list([G|Gs], (G ; R)) :- disj_list(Gs, R).
 
 %Build one disjunct per branch: (Conj, Out = Val):
