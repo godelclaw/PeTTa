@@ -208,6 +208,8 @@ validate_existing_space_rows(Name, Schema) :-
            ; true )).
 
 existing_space_row(Name, Row) :-
+    space_primitive(Name, Row).
+existing_space_row(Name, Row) :-
     current_predicate(Name/Arity),
     functor(Head, Name, Arity),
     catch(clause(Head, true), _, fail),
