@@ -273,7 +273,8 @@ translate_expr([H0|T0], Goals, Out) :-
                                            append(FreeVars, Args, FullArgs),
                                            % compile clause with all bound + free vars
                                            translate_clause([=, [F|FullArgs], Body], Clause),
-                                           register_fun(F),
+                                           %translate_clause records arities; keep the function marker idempotent.
+                                           ( fun(F) -> true ; assertz(fun(F)) ),
                                            assertz(Clause),
                                            format(atom(Label), "metta lambda (~w)", [F]),
                                            maybe_print_compiled_clause(Label, ['|->', Args, Body], Clause),
@@ -464,11 +465,13 @@ hyperpose_runtime(Exprs, Out) :- is_list(Exprs),
 memberchk_eq(V, [H|_]) :- V == H, !.
 memberchk_eq(V, [_|T]) :- memberchk_eq(V, T).
 
-%Generate readable lambda name:
-next_lambda_name(Name) :- ( catch(nb_getval(lambda_counter, Prev), _, Prev = 0) ),
+%Generate a readable name, with a shared counter for lambdas compiled in workers:
+next_lambda_name(Name) :- flag(lambda_counter, Prev, Prev + 1),
                           N is Prev + 1,
-                          nb_setval(lambda_counter, N),
-                          format(atom(Name), 'lambda_~d', [N]).
+                          format(atom(Candidate), 'lambda_~d', [N]),
+                          ( ( fun(Candidate) ; current_predicate(Candidate/_) )
+                            -> next_lambda_name(Name)
+                            ; Name = Candidate ).
 
 declared_output_type(F, OutType) :- atom(F),
                                     nonvar(OutType),
