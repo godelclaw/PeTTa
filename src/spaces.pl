@@ -28,10 +28,13 @@ remove_sexp(Space, TermIn) :-
         retractall(space_primitive(Space, TermIn))
     ).
 
+%%An unbound atom would match every row, so it is not added:
+'add-atom'(_, Term, _) :- var(Term), !, instantiation_error(Term).
+
 %Add a function atom. On failure or exception it rolls back its staged raw
 %atom, registration, metadata and compiled-dependency state; concurrent
 %observers can still see the interval between staging and cleanup.
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], !,
+'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
                                  length(W, SourceArity),
                                  snapshot_runtime_function_add(
                                      FAtom, SourceArity, Snapshot),
@@ -154,8 +157,11 @@ restore_runtime_compiled_clauses(
 runtime_source_key([Eq, [F|Args], _], F/N) :-
     Eq == (=), atom(F), is_list(Args), length(Args, N).
 
+%%A removal with an unknown function name must not erase program rows:
+'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
+
 %%Remove a function atom:
-'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body], !,
+'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body], atom(F), !,
                                        remove_sexp(Space, Term),
                                        ( atom(F), nb_current(F, Prev) -> true ; Prev = [] ),
                                        (   select(Meta, Prev, Rest),
@@ -190,7 +196,7 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 
 %Updates whose row the translator proved against the space's declared schema
 %(typed_space_update_goal/4). A function atom keeps its own clause.
-'add-atom-proven'(Space, Term, true) :- Term = [=,_,_], !,
+'add-atom-proven'(Space, Term, true) :- ( var(Term) -> true ; Term = [=,_,_] ), !,
                                         'add-atom'(Space, Term, true).
 'add-atom-proven'(Space, Term, true) :- add_sexp(Space, Term).
 
