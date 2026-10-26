@@ -289,6 +289,7 @@ builtin_implementation_exemption(arity/2, registry_runtime_state).
 builtin_implementation_exemption(translator_rule/1, translator_runtime_state).
 builtin_implementation_exemption(get_function_type/2, legacy_type_helper).
 builtin_implementation_exemption(get_type_candidate/2, legacy_type_helper).
+builtin_implementation_exemption(checked_args/4, legacy_type_helper).
 builtin_implementation_exemption(import_error_propagates/1, import_helper).
 builtin_implementation_exemption(import_file_string/2, import_helper).
 builtin_implementation_exemption(import_once/3, import_helper).

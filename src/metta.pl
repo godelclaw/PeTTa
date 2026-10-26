@@ -217,16 +217,28 @@ member_alpha(X, [_|T]) :- member_alpha(X, T).
 
 %%% Type system: %%%
 get_function_type([F|Args], T) :- nonvar(F), match('&self', [':',F,[->|Ts]], _, _),
-                                  append(As,[T],Ts),
-                                  maplist('get-type',Args,As).
+                                  append(As,[T0],Ts),
+                                  checked_args(As, Args, As1, Args1),
+                                  T = T0,
+                                  maplist('get-type',Args1,As1).
+%As in typed calls, an argument declared %Undefined% is not checked. These parameters are found
+%before the requested type or another argument can bind a type variable to %Undefined%:
+checked_args([], [], [], []).
+checked_args([A|As], [X|Xs], Bs, Ys) :- ( A == '%Undefined%' -> Bs = Bs1, Ys = Ys1 ; Bs = [A|Bs1], Ys = [X|Ys1] ),
+                                        checked_args(As, Xs, Bs1, Ys1).
 
 :- dynamic 'get-type'/2.
-'get-type'(X, T) :- (get_type_candidate(X, T) *-> true ; T = '%Undefined%' ).
-get_type_candidate(X, 'Number')   :- number(X), !.
+%An unbound request takes each type of the value, or %Undefined% if it has none. %Undefined% is
+%confirmed only for a value without types or with %Undefined% among them:
+'get-type'(X, T) :- ( var(T) -> ( get_type_candidate(X, T0) *-> T = T0 ; T = '%Undefined%' )
+                    ; T == '%Undefined%' -> ( \+ get_type_candidate(X, _) -> true ; get_type_candidate(X, T) )
+                    ; get_type_candidate(X, T) ).
+%An intrinsic kind is chosen before the requested type is compared:
+get_type_candidate(X, T) :- number(X), !, T = 'Number'.
 get_type_candidate(X, _) :- var(X), !.
-get_type_candidate(X, 'String')   :- string(X), !.
-get_type_candidate(true, 'Bool')  :- !.
-get_type_candidate(false, 'Bool') :- !.
+get_type_candidate(X, T) :- string(X), !, T = 'String'.
+get_type_candidate(true, T) :- !, T = 'Bool'.
+get_type_candidate(false, T) :- !, T = 'Bool'.
 get_type_candidate(X, T) :- get_function_type(X,T).
 get_type_candidate(X, T) :- \+ get_function_type(X, _),
                             is_list(X),
