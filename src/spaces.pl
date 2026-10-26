@@ -1,10 +1,15 @@
-%Since both normal add-attom call and function additions needs to add the S-expression:
-add_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
-                               assertz(Term).
+:- dynamic space_primitive/2.
+
+%Nonempty expressions keep their indexed rows; other atoms are stored separately.
+%An unbound atom still raises an instantiation error:
+add_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
+                        ; Atom = [Rel|Args] -> Term =.. [Space, Rel | Args], assertz(Term)
+                        ; must_be(atom, Space), assertz(space_primitive(Space, Atom)) ).
 
 %Same but for removal:
-remove_sexp(Space, [Rel|Args]) :- Term =.. [Space, Rel | Args],
-                                  retractall(Term).
+remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
+                           ; Atom = [Rel|Args] -> Term =.. [Space, Rel | Args], retractall(Term)
+                           ; must_be(atom, Space), retractall(space_primitive(Space, Atom)) ).
 
 %Add a function atom:
 'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], !,
@@ -53,9 +58,9 @@ space_missing(error(existence_error(procedure, Space/Arity), _), Term) :-
 match(_, LComma, OutPattern, Result) :- LComma == [','], !,
                                         Result = OutPattern.
 match(Space, [Comma|[Head|Tail]], OutPattern, Result) :- Comma == ',', !,
-                                                         append([Space], Head, List),
-                                                         Term =.. List,
-                                                         space_call(Term),
+                                                         ( var(Head) -> 'get-atoms'(Space, Head)
+                                                         ; Head = [_|_] -> Term =.. [Space|Head], space_call(Term)
+                                                         ; must_be(atom, Space), space_primitive(Space, Head) ),
                                                          \+ cyclic_term(OutPattern),
                                                          match(Space, [','|Tail], OutPattern, Result).
 
@@ -66,12 +71,14 @@ match(Space, PatternVar, OutPattern, Result) :- var(PatternVar), !,
                                                 Result = OutPattern.
 
 %Match for pattern:
-match(Space, [Rel|PatArgs], OutPattern, Result) :- Term =.. [Space, Rel | PatArgs],
-                                                   space_call(Term),
-                                                   \+ cyclic_term(OutPattern),
-                                                   Result = OutPattern.
+match(Space, Pattern, OutPattern, Result) :- ( Pattern = [Rel|PatArgs]
+                                             -> Term =.. [Space, Rel | PatArgs], space_call(Term)
+                                              ; must_be(atom, Space), space_primitive(Space, Pattern) ),
+                                             \+ cyclic_term(OutPattern),
+                                             Result = OutPattern.
 
 %Get all atoms in space, irregard of arity:
+'get-atoms'(Space, Pattern) :- space_primitive(Space, Pattern).
 'get-atoms'(Space, Pattern) :- current_predicate(Space/Arity),
                                functor(Head, Space, Arity),
                                clause(Head, true),
