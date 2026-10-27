@@ -1,4 +1,15 @@
 :- dynamic space_primitive/2.
+:- dynamic created_space/1.
+
+% A new empty space is a fresh first-class name, including before any row is
+% added. Never select an existing predicate or a previously returned space.
+'new-space'(Space) :- with_mutex(metta_space_creation, fresh_space_name(Fresh)),
+                      Space = Fresh.
+
+fresh_space_name(Space) :- gensym('&space_', Candidate),
+    ( (current_predicate(Candidate/_) ; created_space(Candidate) ; space_primitive(Candidate, _))
+      -> fresh_space_name(Space)
+       ; assertz(created_space(Candidate)), Space = Candidate ).
 
 %Nonempty expressions keep their indexed rows; other atoms are stored separately.
 %An unbound atom still raises an instantiation error:

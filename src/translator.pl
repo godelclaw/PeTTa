@@ -291,9 +291,9 @@ translate_expr([H0|T0], Goals, Out) :-
                                                                    Goal =.. [HV,S,Atom,Out],
                                                                    append([GsH,G1,[Goal]], Goals)
         ; HV == match, T = [Space, Pattern, Body] -> translate_expr(Space, G1, S),
-                                                     translate_expr(Body, GsB, Out),
-                                                     append(G1, [match(S, Pattern, Out, Out)], G2),
-                                                     append(G2, GsB, Goals)
+                                                     translate_expr(Body, GsB, BodyOut),
+                                                     append([GsH, G1, [match(S, Pattern, BodyOut, BodyOut)],
+                                                             GsB, [Out = BodyOut]], Goals)
         %--- Predicate to compiled goal ---:
         ; HV == translatePredicate, T = [Expr] -> Expr = [S|Args],
                                                   translate_args(Args, GsArgs, ArgsOut),
@@ -372,7 +372,8 @@ build_call_or_partial(Fun, AVs, Out, Inner, Extra, Goals) :- length(AVs, N),
                                                                   append(Inner, [Goal|Extra], Goals)
                                                                 ; incomplete_application_kind(Fun, Arity, partial)
                                                                -> Out = partial(Fun, AVs),
-                                                                  append(Inner, Extra, Goals)
+                                                                  % A closure is not the completed call's result.
+                                                                  Goals = Inner
                                                                 ; append(Inner, [throw_function_overapplication(Fun, N)], Goals)
                                                              ).
 
@@ -380,7 +381,10 @@ build_call_or_partial(Fun, AVs, Out, Inner, Extra, Goals) :- length(AVs, N),
 typed_functioncall_branch(Fun, TypeChain, T, GsH, IsPartial, Bound, Out, BranchGoal) :-
     TypeChain = [->|Xs],
     append(ArgTypes, [OutType], Xs),
-    translate_args_by_type(T, ArgTypes, GsT2, AVsTmp0),
+    ( IsPartial -> same_length(Bound, BoundTypes),
+                   append(BoundTypes, RemainingTypes, ArgTypes)
+                ; RemainingTypes = ArgTypes ),
+    translate_args_by_type(T, RemainingTypes, GsT2, AVsTmp0),
     ( IsPartial -> append(Bound, AVsTmp0, AVsTmp) ; AVsTmp = AVsTmp0 ),
     append(GsH, GsT2, InnerTmp),
     ( (OutType == '%Undefined%' ; OutType == '_' ; OutType == 'Atom')
