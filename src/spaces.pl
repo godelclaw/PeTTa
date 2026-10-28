@@ -52,7 +52,8 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
 %%A removal with an unknown function name must not erase program rows:
 'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
 'remove-atom'(Space, Term, true) :- atom(Space), Space \== '&self',
-                                    nonvar(Term), Term = [Colon, _, _], Colon == ':', !,
+                                    nonvar(Term), Term = [Colon, Function, _],
+                                    (Colon == ':' ; var(Colon), atom(Function)), !,
                                     findall(F,
                                       ( copy_term(Term, [':', F, Type]),
                                         match(Space, [':', F, Type], Type, Type),
@@ -78,7 +79,8 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
                                        ( Refs = [] -> Removed = false ; Removed = true ).
 
 %Remove the type atoms matching a pattern, which may be arrow declarations of several functions:
-'remove-atom'(Space, Term, true) :- Space == '&self', nonvar(Term), Term = [Colon, _, _], Colon == ':', !,
+'remove-atom'(Space, Term, true) :- Space == '&self', nonvar(Term), Term = [Colon, Function, _],
+                                    (Colon == ':' ; var(Colon), atom(Function)), !,
                                     findall(Fun, ( copy_term(Term, [_, Fun, TypeChain]),
                                                    catch('&self'(:, Fun, TypeChain), _, fail),
                                                    is_arrow_declaration(Space, [':', Fun, TypeChain], Fun) ), Funs0),

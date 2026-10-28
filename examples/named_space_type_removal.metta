@@ -8,7 +8,26 @@
 !(add-atom &named-types (: named-g (-> A %Undefined%)))
 !(test (collapse (eval (named-caller b) &named-types)) ())
 !(test (collapse (eval (named-caller a) &named-types)) (((seen a) (seen a))))
+
 !(remove-atom &named-types (: $f $type))
 !(test (collapse (eval (named-caller b) &named-types)) (((seen b) (seen b))))
 !(test (collapse (match &named-types (: $f $type) ($f $type))) ())
 !(test (collapse (eval (named-caller a) &named-types)) (((seen a) (seen a))))
+
+; A variable relation head can match an arrow fact for a concrete function.
+!(add-atom &named-types (: a A))
+!(add-atom &named-types (: b B))
+!(add-atom &named-types (: named-f (-> A %Undefined%)))
+!(test (collapse (eval (named-caller b) &named-types)) ())
+!(remove-atom &named-types ($relation named-f $type))
+!(test (collapse (eval (named-caller b) &named-types)) (((seen b) (seen b))))
+
+; The default owner follows the same live-declaration rule.
+(: remove-pattern-a A)
+(: remove-pattern-b B)
+(= (self-pattern-f $x) (SelfSeen $x))
+(= (self-pattern-caller $x) (self-pattern-f $x))
+(: self-pattern-f (-> A %Undefined%))
+!(test (collapse (self-pattern-caller remove-pattern-b)) ())
+!(remove-atom &self ($relation self-pattern-f $type))
+!(test (collapse (self-pattern-caller remove-pattern-b)) ((SelfSeen remove-pattern-b)))
