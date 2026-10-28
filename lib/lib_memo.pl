@@ -778,8 +778,7 @@ cache_call(Fun, AVs, Out) :-
     ),
     findall(Term,
         (translated_from(_, Term), Term = [=, [Fun|_], _]),
-        RawTerms),
-    sort(RawTerms, Terms),
+        Terms),
     forall(member(Term, Terms), 'remove-atom'('&self', Term, _)),
     enable_memoization(Fun),
     forall(member(Term, Terms), 'add-atom'('&self', Term, _)).
@@ -798,8 +797,7 @@ cache_call(Fun, AVs, Out) :-
           Term = [=, [Fun|Args], _],
           length(Args, CallArity)
         ),
-        RawTerms),
-    sort(RawTerms, Terms),
+        Terms),
     forall(member(Term, Terms), 'remove-atom'('&self', Term, _)),
     enable_memoization(Fun, CallArity),
     forall(member(Term, Terms), 'add-atom'('&self', Term, _)).
