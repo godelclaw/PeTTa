@@ -102,6 +102,7 @@ space_missing(error(existence_error(procedure, Space/Arity), _), Term) :-
     functor(Term, Space, Arity), !,
     dynamic(Space/Arity),
     fail.
+space_missing(Error, _) :- throw(Error).
 %Recognize (: Fun (-> ...)) in the space whose declarations the translator reads:
 is_arrow_declaration(Space, Term, Fun) :- Space == '&self',
                                           nonvar(Term), Term = [Colon, Fun, TypeChain], Colon == ':',

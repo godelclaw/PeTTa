@@ -160,8 +160,7 @@ function_type_chains(F, TypeChains) :-
 
 function_type_chains(Space, F, TypeChains) :-
     findall(TypeChain,
-            catch(match(Space, [':', F, TypeChain], TypeChain, TypeChain),
-                  _, fail),
+            match(Space, [':', F, TypeChain], TypeChain, TypeChain),
             Live),
     variant_unique(Live, TypeChains).
 

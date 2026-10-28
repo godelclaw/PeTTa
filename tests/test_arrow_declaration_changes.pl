@@ -284,4 +284,22 @@ test(named_eta_atom_result_refuses_the_retired_extra_arity,
     'add-atom'(Space, [':', ltc_named_eta_value, ['->', '%Undefined%', 'Atom']], true),
     eval([ltc_named_eta_value, 1, 2], Space, _).
 
+test(type_observation_fault_is_not_an_absent_declaration,
+     [setup(assertz(('$ltc_faulted_types'(':', _, _) :-
+                       throw(error(resource_error(type_observation), lookup_test))), Ref)),
+      cleanup(erase(Ref)),
+      throws(error(resource_error(type_observation), lookup_test))]) :-
+    function_type_chains('$ltc_faulted_types', absent_function, _).
+
+test(missing_procedure_inside_a_type_producer_is_not_an_empty_owner,
+     [setup(assertz(('$ltc_inner_fault'(':', _, _) :-
+                       throw(error(existence_error(procedure, '$ltc_missing_producer'/1), lookup_test))), Ref)),
+      cleanup(erase(Ref)),
+      throws(error(existence_error(procedure, '$ltc_missing_producer'/1), lookup_test))]) :-
+    function_type_chains('$ltc_inner_fault', absent_function, _).
+
+test(unwritten_type_owner_remains_empty,
+     [cleanup(abolish('$ltc_unwritten_types'/3))]) :-
+    function_type_chains('$ltc_unwritten_types', absent_function, []).
+
 :- end_tests(arrow_declaration_changes).
