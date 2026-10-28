@@ -283,7 +283,8 @@ translate_expr([H0|T0], Goals, Out) :-
                                            (arity(F, Arity) -> true ; assertz(arity(F, Arity))),
                                            % emit closure capturing the environment (free vars)
                                            ( FreeVars == [] -> Out = F
-                                                             ; Out = partial(F, FreeVars) )
+                                                             ; Out = partial(F, FreeVars) ),
+                                           Goals = GsH
         %--- Spaces ---:
         ; ( HV == 'add-atom' ; HV == 'remove-atom' ), T = [Space,Atom] ->
                                                                    translate_expr(Space, G1, S),
