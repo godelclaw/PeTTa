@@ -257,7 +257,7 @@ recompile_function(function(Space, _F, Pred, Clauses)) :-
     forall((member(Arity, PreviousArities),
             \+ defined_predicate_arity(Pred, Arity)),
            retractall(arity(Pred, Arity))),
-    metta_on_function_changed(Pred).
+    notify_function_changed(Pred).
 
 specialization_stack(Stack) :-
     catch(nb_getval('$spec_stack', Stack), _, Stack = []).
@@ -383,8 +383,22 @@ dynamic_call_view(Head, View) :-
     ; View = data(Head) ).
 
 prepare_dynamic_call(Space, Head, Count, Out, Modes, Continuation) :-
+    observe_application_head(Space, Head, Count),
     with_translation_space(Space, dynamic_call_view(Head, View)),
     select_dynamic_call(Space, View, Count, Out, Modes, Continuation).
+
+% Absence is an observation too: a later definition can change a data result.
+% Record both the local name and any shared provider it currently resolves to.
+observe_application_head(Space, Head, Count) :- atom(Head), !,
+    Arity is Count + 1, space_pred(Space, Head, Local),
+    observe_function_call(Local, Arity),
+    ( space_call_target(Space, Head, Pred), Pred \== Local
+      -> observe_function_call(Pred, Arity) ; true ).
+observe_application_head(_, Head, Count) :- nonvar(Head),
+    Head = partial(Base, Bound), atom(Base), is_list(Bound), !,
+    length(Bound, N), Arity is N + Count + 1,
+    observe_function_call(Base, Arity).
+observe_application_head(_, _, _).
 
 select_dynamic_call(_, data(Head), Count, _, Modes, data(Head)) :-
     length(Modes, Count), maplist(=(eager), Modes).
@@ -716,7 +730,9 @@ translate_expr([H0|T0], Goals, Out) :-
           %Literals (numbers, strings, etc.), known non-function atom => data:
           ; ( atomic(HV), \+ atom(HV) ; atom(HV), \+ callable_fun(HV, _) ) -> note_symbol_head(HV),
                                                                                        Out = [HV|AVs],
-                                                                                       Goals = Inner
+                                                                                       current_translation_space(DataSpace),
+                                                                                       length(T, Count),
+                                                                                       Goals = [observe_application_head(DataSpace, HV, Count)|Inner]
           %Plain data list: evaluate inner fun-sublists
           ; is_list(HV) -> eval_data_term(HV, Gd, HV1),
                            append(Inner, Gd, Goals),
@@ -749,9 +765,11 @@ deferred_registered_call(Fun, Args, Out) :-
 
 build_call_or_partial(Fun, Args, Out, Inner, Extra, Goals) :-
     application_plan(Fun, Args, Out, Plan),
-    ( Plan = invoke(Goal) -> append(Inner, [Goal|Extra], Goals)
-    ; Plan = value(Value) -> Out = Value, Goals = Inner
-    ; Plan = overapplied(F, N), append(Inner, [throw_function_overapplication(F, N)], Goals) ).
+    length(Args, NArgs), Arity is NArgs + 1,
+    Observed = [observe_function_call(Fun, Arity)|Inner],
+    ( Plan = invoke(Goal) -> append(Observed, [Goal|Extra], Goals)
+    ; Plan = value(Value) -> Out = Value, Goals = Observed
+    ; Plan = overapplied(F, N), append(Observed, [throw_function_overapplication(F, N)], Goals) ).
 
 run_dynamic_application(Fun, Args, Out, Extra) :-
     application_plan(Fun, Args, Out, Plan),
@@ -865,7 +883,7 @@ retranslate_function(Fun) :-
          ( existing_specialization(_, Fun) -> ConstrainArgs = false ; ConstrainArgs = true ),
          forall(member(stored(_, Ref, Stored), Clauses), retranslate_clause(ConstrainArgs, Ref, Stored)),
          forget_unused_arities(Fun, Clauses),
-         forall(metta_on_function_changed(Fun), true) ).
+         notify_function_changed(Fun) ).
 
 retranslate_clause(ConstrainArgs, Ref, Stored) :- stored_equation(Stored, Equation),
                                                   once(translate_clause(Equation, Clause, ConstrainArgs)),

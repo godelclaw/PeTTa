@@ -36,7 +36,7 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
                                  Arity is N + 1,
                                  assertz(arity(Pred,Arity)),
                                  install_function_clause(Space, Term, Ref),
-                                 metta_on_function_changed(Pred),
+                                 notify_function_changed(Pred),
                                  (current_predicate(invalidate_specializations/1) -> invalidate_specializations(Pred) ; true),
                                  ( silent(true) -> true
                                  ; clause(Head, Body, Ref),
@@ -69,12 +69,12 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
                                        space_pred(Space, F, Pred),
                                        ( retract(function_metadata(Pred, fun_meta(Args, Body))) -> true ; true ),
                                        uninstall_function_clauses(Space, Term, Refs),
-                                       metta_on_function_changed(Pred),
+                                       notify_function_changed(Pred),
                                        (current_predicate(invalidate_specializations/1) -> invalidate_specializations(Pred) ; true),
                                        ( \+ ( current_predicate(Pred/A), functor(H2, Pred, A), clause(H2, _, _) )
                                          -> retractall(fun(Pred)),
                                             retractall(space_fun(Space, F, Pred)),
-                                            metta_on_function_removed(Pred)
+                                            notify_function_removed(Pred)
                                          ; true ),
                                        ( Refs = [] -> Removed = false ; Removed = true ).
 

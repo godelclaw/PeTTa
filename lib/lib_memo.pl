@@ -54,6 +54,9 @@ metta_on_function_removed(Fun) :-
     cache_invalidate(Fun),
     disable_memoization(Fun).
 
+:- multifile metta_on_call/2.
+metta_on_call(Fun, Arity) :- memo_record_dependency(Fun, Arity).
+
 % Configuration API
 
 :- dynamic memo_strategy/1.
@@ -572,7 +575,7 @@ canonicalize_args_key(AVs, KeyAVs) :-
     copy_term(Quantized, KeyAVs),
     numbervars(KeyAVs, 0, _).
 
-with_memo_call_context(Fun, Arity, Goal) :-
+memo_record_dependency(Fun, Arity) :-
     ( metta_memo_call_ctx(ParentFun, ParentArity)
     -> ( ParentFun == Fun, ParentArity == Arity
        -> true
@@ -580,7 +583,10 @@ with_memo_call_context(Fun, Arity, Goal) :-
          -> true
          ; asserta(metta_memo_dep(ParentFun, ParentArity, Fun, Arity))
          ))
-    ; true ),
+    ; true ).
+
+with_memo_call_context(Fun, Arity, Goal) :-
+    memo_record_dependency(Fun, Arity),
     setup_call_cleanup(
         asserta(metta_memo_call_ctx(Fun, Arity)),
         Goal,

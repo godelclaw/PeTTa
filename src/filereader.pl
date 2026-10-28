@@ -96,7 +96,7 @@ process_form(Space, compile_functions, parsed(function, FormStr, Term), []) :- a
                                                             Term = [=, [F|_], _],
                                                             install_function_clause(Space, Term, Ref),
                                                             space_pred(Space, F, Pred),
-                                                            metta_on_function_changed(Pred),
+                                                            notify_function_changed(Pred),
                                                             ( silent(true) -> true ; format("\e[33m--> metta function -->~n\e[36m~w~n\e[33m--> prolog clause -->~n\e[32m", [FormStr]),
                                                                                      clause(Head, Body, Ref),
                                                                                      ( Body == true -> Show = Head; Show = (Head :- Body) ),
