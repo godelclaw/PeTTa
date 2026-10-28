@@ -1,0 +1,33 @@
+; Output bindings belong to the chosen branch, never to clause translation.
+(= (branch-seven) 7)
+(= (branch-pick $h) (if (> $h 10) (let $c (branch-seven) $h) (branch-pick 20)))
+!(test (collapse (branch-pick 1)) (20))
+
+(= (branch-if $flag $x) (if $flag (progn true $x) other))
+!(test (branch-if True kept) kept)
+!(test (branch-if False kept) other)
+(= (branch-if-else $flag $x) (if $flag other (progn true $x)))
+!(test (branch-if-else True kept) other)
+!(test (branch-if-else False kept) kept)
+
+(= (branch-case $key $x) (case $key ((first (progn true $x)) ($other fallback))))
+!(test (branch-case first kept) kept)
+!(test (branch-case second kept) fallback)
+(= (branch-choices $x) (superpose ((progn true $x) other)))
+!(test (collapse (branch-choices kept)) (kept other))
+(= (branch-two-values $x $y) (superpose ((progn true $x) (progn true $y))))
+!(test (collapse (branch-two-values left right)) (left right))
+!(test (collapse (branch-two-values same same)) (same same))
+
+; Only the selected branch runs, and an effect in it runs once per answer.
+!(bind! &branch-count (new-state 0))
+(= (branch-tick) (let $n (get-state &branch-count)
+                  (progn (change-state! &branch-count (+ $n 1)) $n)))
+(= (branch-effect $flag $x) (if $flag (let $n (branch-tick) $x) nope))
+!(test (branch-effect False input) nope)
+!(test (get-state &branch-count) 0)
+!(test (branch-effect True input) input)
+!(test (get-state &branch-count) 1)
+!(test (if True safe (/ 1 0)) safe)
+!(test (if False (/ 1 0) safe) safe)
+!(test (if False (progn true (Error data)) (progn true kept)) kept)
