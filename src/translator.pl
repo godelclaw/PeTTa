@@ -329,39 +329,46 @@ throw_function_overapplication(Fun, ActualInputArity) :-
     throw(error(domain_error(function_input_arities(Fun, KnownInputArities), ActualInputArity), none)).
 
 % Runtime reduction receives values, not authored argument expressions.
-reduce([Head|Args], Out) :- ready_argument_plans(Args, Plans),
-                          dynamic_call('&self', Head, Plans, Out).
-space_reduce(Space, [Head|Args], Out) :- ready_argument_plans(Args, Plans),
-                                      dynamic_call(Space, Head, Plans, Out).
-
-ready_argument_plans([], []).
-ready_argument_plans([Arg|Args], [argument(Arg, Arg, true)|Plans]) :-
-    ready_argument_plans(Args, Plans).
+reduce([Head|Args], Out) :- dynamic_call('&self', Head, Args, Out).
+space_reduce(Space, [Head|Args], Out) :- dynamic_call(Space, Head, Args, Out).
 
 %Calling reduce from aggregate function foldall needs this argument wrapping
 agg_reduce(AF, Acc, Val, NewAcc) :- reduce([AF, Acc, Val], NewAcc).
 space_agg_reduce(Space, AF, Acc, Val, NewAcc) :-
     space_reduce(Space, [AF, Acc, Val], NewAcc).
 
-% A variable head is resolved before selecting its argument policy. Keep the
-% authored argument and its already translated continuation together: Atom
-% holds that source, while other types run the continuation. A variable's
-% value has a true continuation, so a value shaped like a call is never run
-% again merely because the head was discovered at runtime.
-dynamic_argument_plans([], []).
-dynamic_argument_plans([Arg|Args], [argument(Arg, Value, Goal)|Plans]) :-
-    translate_expr(Arg, Goals, Value), goals_list_to_conj(Goals, Goal),
-    dynamic_argument_plans(Args, Plans).
+% Freeze demand from the declaration before argument guards can bind shared
+% type variables. Only a literal Atom holds source; a type variable that later
+% becomes Atom still has its original eager check.
+dynamic_argument_modes([], []).
+dynamic_argument_modes([Type|Types], [Mode|Modes]) :-
+    ( Type == 'Atom' -> Mode = raw
+    ; (Type == '%Undefined%' ; Type == '_') -> Mode = eager
+    ; Mode = check(Type) ),
+    dynamic_argument_modes(Types, Modes).
 
-dynamic_arguments([], _, []).
-dynamic_arguments([argument(Source, Value, Goal)|Plans], [Type|Types], [Arg|Args]) :-
-    ( Type == 'Atom' -> Arg = Source
-    ; call(Goal), Arg = Value,
-      ( (Type == '%Undefined%' ; Type == '_') -> true
-      ; type_guard_goal(Arg, Type, Guard), call(Guard) ) ),
-    dynamic_arguments(Plans, Types, Args).
-dynamic_arguments([argument(_, Value, Goal)|Plans], untyped, [Value|Args]) :-
-    call(Goal), dynamic_arguments(Plans, untyped, Args).
+check_dynamic_argument(_, raw, _).
+check_dynamic_argument(_, eager, _).
+check_dynamic_argument(Space, check(Type), Value) :-
+    with_translation_space(Space, type_guard_goal(Value, Type, Guard)),
+    call(Guard).
+
+dynamic_ready_argument(Space, Mode, Source, Value, Argument) :-
+    ( Mode == raw -> Argument = Source
+    ; Argument = Value, check_dynamic_argument(Space, Mode, Argument) ).
+
+% Keep argument conjunctions in their enclosing clause. A cut in an eager
+% argument must retain its lexical scope, while a held argument never enters
+% that conjunction. Ready values, including call-shaped ones, are not rerun.
+dynamic_argument_goals(_, [], [], [], []).
+dynamic_argument_goals(Space, [Source|Sources], [Mode|Modes], [Argument|Arguments], [Goal|Goals]) :-
+    translate_expr_to_conj(Source, Conjunction, Value),
+    ( Conjunction == true
+      -> Goal = dynamic_ready_argument(Space, Mode, Source, Value, Argument)
+    ; Goal = ( Mode == raw -> Argument = Source
+             ; Conjunction, Argument = Value,
+               check_dynamic_argument(Space, Mode, Argument) ) ),
+    dynamic_argument_goals(Space, Sources, Modes, Arguments, Goals).
 
 dynamic_target(Head, Pred, Bound) :- nonvar(Head), Head = partial(Base, Bound),
     atom(Base), is_list(Bound), !,
@@ -371,27 +378,46 @@ dynamic_target(Head, Pred, Bound) :- nonvar(Head), Head = partial(Base, Bound),
 dynamic_target(Head, Pred, []) :- atom(Head), callable_fun(Head, Pred),
     runtime_callable(Pred).
 
-dynamic_call(Space, Head, Plans, Out) :-
-    with_translation_space(Space, dynamic_call(Head, Plans, Out)).
-dynamic_call(Head, Plans, Out) :-
+dynamic_call_view(Head, View) :-
     ( dynamic_target(Head, Pred, Bound)
-      -> pred_type_chains(Pred, Chains),
-         ( Chains == []
-           -> dynamic_arguments(Plans, untyped, Args), append(Bound, Args, All),
-              run_dynamic_application(Pred, All, Out, [])
-           ; member(['->'|Types], Chains), append(ArgTypes, [ResultType], Types),
-             same_length(Bound, BoundTypes), append(BoundTypes, RemainingTypes, ArgTypes),
-             maplist(dynamic_bound_argument, Bound, BoundTypes),
-             dynamic_arguments(Plans, RemainingTypes, Args), append(Bound, Args, All),
-             ( (ResultType == '%Undefined%' ; ResultType == '_' ; ResultType == 'Atom')
-               -> Extra = []
-                ; type_guard_goal(Out, ResultType, Guard), Extra = [Guard] ),
-             run_dynamic_application(Pred, All, Out, Extra) )
-       ; dynamic_arguments(Plans, untyped, Args), Out = [Head|Args], \+ cyclic_term(Out) ).
+      -> pred_type_chains(Pred, Chains), View = target(Pred, Bound, Chains)
+    ; View = data(Head) ).
 
-dynamic_bound_argument(Value, Type) :-
-    ( (Type == 'Atom' ; Type == '%Undefined%' ; Type == '_') -> true
-    ; type_guard_goal(Value, Type, Guard), call(Guard) ).
+prepare_dynamic_call(Space, Head, Count, Out, Modes, Continuation) :-
+    with_translation_space(Space, dynamic_call_view(Head, View)),
+    select_dynamic_call(Space, View, Count, Out, Modes, Continuation).
+
+select_dynamic_call(_, data(Head), Count, _, Modes, data(Head)) :-
+    length(Modes, Count), maplist(=(eager), Modes).
+select_dynamic_call(Space, target(Pred, Bound, Chains), Count, Out, Modes, invoke(Pred, Bound, Extra)) :-
+    length(Bound, BoundCount), TotalArity is BoundCount + Count + 1,
+    ( arity(Pred, Known), Known >= TotalArity, defined_predicate_arity(Pred, Known)
+      -> true
+    ; TotalInputs is TotalArity - 1, throw_function_overapplication(Pred, TotalInputs) ),
+    ( Chains == []
+      -> length(Modes, Count), maplist(=(eager), Modes), Extra = []
+    ; member(['->'|Types], Chains), append(ArgTypes, [ResultType], Types),
+      dynamic_argument_modes(ArgTypes, AllModes),
+      ( (ResultType == '%Undefined%' ; ResultType == '_' ; ResultType == 'Atom')
+        -> Extra = []
+      ; with_translation_space(Space, type_guard_goal(Out, ResultType, Guard)),
+        Extra = [Guard] ),
+      same_length(Bound, BoundModes), append(BoundModes, RemainingModes, AllModes),
+      length(Modes, Count), append(Modes, _, RemainingModes),
+      maplist(check_dynamic_argument(Space), BoundModes, Bound) ).
+
+finish_dynamic_call(Space, invoke(Pred, Bound, Extra), Args, Out) :-
+    append(Bound, Args, All),
+    with_translation_space(Space, run_dynamic_application(Pred, All, Out, Extra)).
+finish_dynamic_call(_, data(Head), Args, Out) :-
+    Out = [Head|Args], \+ cyclic_term(Out).
+
+% reduce and the aggregate callbacks arrive with values. They share the same
+% declaration snapshot and finish boundary without source evaluation.
+dynamic_call(Space, Head, Args, Out) :-
+    length(Args, Count), prepare_dynamic_call(Space, Head, Count, Out, Modes, Continuation),
+    maplist(check_dynamic_argument(Space), Modes, Args),
+    finish_dynamic_call(Space, Continuation, Args, Out).
 
 %Combined expr translation to goals list
 translate_expr_to_conj(Input, Conj, Out) :- translate_expr(Input, Goals, Out),
@@ -664,8 +690,10 @@ translate_expr([H0|T0], Goals, Out) :-
           append(Inner, [Goal], Goals)
         % A variable head needs its live declaration before arguments run.
         ; var(HV) -> current_translation_space(CallSpace),
-                     dynamic_argument_plans(T, Plans),
-                     append(GsH, [dynamic_call(CallSpace, HV, Plans, Out)], Goals)
+                     length(T, Count), length(Modes, Count),
+                     dynamic_argument_goals(CallSpace, T, Modes, Arguments, ArgumentGoals),
+                     append([GsH, [prepare_dynamic_call(CallSpace, HV, Count, Out, Modes, Continuation)],
+                             ArgumentGoals, [finish_dynamic_call(CallSpace, Continuation, Arguments, Out)]], Goals)
         %--- Automatic 'smart' dispatch, translator deciding when to create a predicate call, data list, or dynamic dispatch: ---
         ; translate_args(T, GsT, AVs),
           append(GsH, GsT, Inner),
