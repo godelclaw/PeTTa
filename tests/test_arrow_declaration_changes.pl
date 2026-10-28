@@ -275,4 +275,13 @@ test(compiler_metadata_stays_with_the_thread_that_translated, [setup(quiet)]) :-
     thread_join(Thread, Status),
     Status == true.
 
+test(named_eta_atom_result_refuses_the_retired_extra_arity,
+     [setup(quiet),
+      throws(error(domain_error(function_input_arities(_, [1]), 2), _))]) :-
+    Space = '&ltc_named_eta',
+    'add-atom'(Space, [=, [ltc_named_eta_base, X, Y], [pair, X, Y]], true),
+    'add-atom'(Space, [=, [ltc_named_eta_value, Z], [ltc_named_eta_base, Z]], true),
+    'add-atom'(Space, [':', ltc_named_eta_value, ['->', '%Undefined%', 'Atom']], true),
+    eval([ltc_named_eta_value, 1, 2], Space, _).
+
 :- end_tests(arrow_declaration_changes).

@@ -109,10 +109,11 @@ pred_type_chains(Pred, TypeChains) :-
     ( space_fun(Space, F, Pred) -> function_type_chains(Space, F, TypeChains)
     ; function_type_chains(Pred, TypeChains) ).
 
-install_function_clause(Space, Term, Ref) :-
+install_function_clause(Space, Stored, Ref) :-
+    stored_equation(Stored, Term),
     with_translation_space(Space, once(translate_clause(Term, Clause))),
     assertz(Clause, Ref),
-    assertz(translated_from(Ref, Space, Term)),
+    assertz(translated_from(Ref, Space, Stored)),
     forget_provisional_arity(Space, Term, Clause).
 
 forget_provisional_arity(Space, Term, Clause) :-
@@ -181,9 +182,10 @@ existing_specialization(Source, Target) :-
     current_predicate(ho_specialization/2), ho_specialization(Source, Target).
 
 function_source_clauses(Space, F, Clauses) :-
-    findall(Ref-Term,
-            ( translated_from(Ref, Space, Term),
+    findall(Ref-Stored,
+            ( translated_from(Ref, Space, Stored),
               clause(_, _, Ref),
+              stored_equation(Stored, Term),
               Term = [=, [SourceF|_], _],
               SourceF == F,
               \+ existing_specialization(_, F) ),
@@ -200,8 +202,9 @@ source_mentions_atom(Term, Atom) :-
 
 direct_source_dependents(Space, Callee, Functions) :-
     findall(F,
-            ( translated_from(Ref, Space, Term),
+            ( translated_from(Ref, Space, Stored),
               clause(_, _, Ref),
+              stored_equation(Stored, Term),
               Term = [=, [F|_], _],
               atom(F),
               \+ existing_specialization(_, F),
@@ -247,9 +250,14 @@ compile_source_clauses([_-Term|Clauses], Space) :-
     compile_source_clauses(Clauses, Space).
 
 recompile_function(function(Space, _F, Pred, Clauses)) :-
+    findall(Arity, (member(Ref-_, Clauses), clause(Head, _, Ref),
+                    functor(Head, Pred, Arity)), PreviousArities),
     erase_compiled_clauses(Clauses),
     retractall(function_metadata(Pred, _)),
     compile_source_clauses(Clauses, Space),
+    forall((member(Arity, PreviousArities),
+            \+ defined_predicate_arity(Pred, Arity)),
+           retractall(arity(Pred, Arity))),
     metta_on_function_changed(Pred).
 
 specialization_stack(Stack) :-
