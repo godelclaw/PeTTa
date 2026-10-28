@@ -112,7 +112,26 @@ pred_type_chains(Pred, TypeChains) :-
 install_function_clause(Space, Term, Ref) :-
     with_translation_space(Space, once(translate_clause(Term, Clause))),
     assertz(Clause, Ref),
-    assertz(translated_from(Ref, Space, Term)).
+    assertz(translated_from(Ref, Space, Term)),
+    forget_provisional_arity(Space, Term, Clause).
+
+forget_provisional_arity(Space, Term, Clause) :-
+    Term = [=, [F|Args], _], space_pred(Space, F, Pred),
+    length(Args, N), SourceArity is N + 1,
+    Clause = (Head :- _), functor(Head, Pred, CompiledArity),
+    ( SourceArity =\= CompiledArity,
+      \+ defined_predicate_arity(Pred, SourceArity)
+      -> retractall(arity(Pred, SourceArity)) ; true ).
+
+% Registration also recognizes syntax and signatures of later definitions.
+% Runtime dispatch needs an installed body; a foreign predicate is a body too.
+defined_predicate_arity(Pred, Arity) :-
+    current_predicate(Pred/Arity), functor(Head, Pred, Arity),
+    ( predicate_property(Head, foreign)
+    ; predicate_property(Head, number_of_clauses(Count)), Count > 0 ).
+
+runtime_callable(Pred) :- arity(Pred, Arity),
+    defined_predicate_arity(Pred, Arity), !.
 
 uninstall_function_clauses(Space, Term, Refs) :-
     findall(Ref, translated_from(Ref, Space, Term), Refs),
@@ -204,8 +223,11 @@ source_dependent_closure(Space, [Current|Pending], Seen, Acc, Functions) :-
     append(Direct, Acc, NextAcc),
     source_dependent_closure(Space, Next, [Current|Seen], NextAcc, Functions).
 
-type_revision_plan(Space, Callee, Plan) :-
-    source_dependent_closure(Space, Callee, Functions),
+type_revision_plan(Space, Callees, Plan) :-
+    findall(F, ( member(Callee, Callees),
+                 source_dependent_closure(Space, Callee, Dependents),
+                 member(F, Dependents) ), All),
+    sort(All, Functions),
     maplist(function_recompile_entry(Space), Functions, Plan).
 
 function_recompile_entry(Space, F, function(Space, F, Pred, Clauses)) :-
@@ -258,13 +280,16 @@ apply_type_revision(Space, Plan) :-
 % Type mutation, dependent recompilation and the compiler metadata facts are
 % one database transaction.
 revise_function_type(Space, F, Mutation) :-
+    revise_function_types(Space, [F], Mutation).
+
+revise_function_types(Space, Functions, Mutation) :-
     with_mutex(petta_type_revision,
         transaction(
-            ( function_type_chains(Space, F, Before),
+            ( maplist(function_type_chains(Space), Functions, Before),
               call(Mutation),
-              function_type_chains(Space, F, After),
+              maplist(function_type_chains(Space), Functions, After),
               ( Before =@= After -> true
-              ; type_revision_plan(Space, F, Plan),
+              ; type_revision_plan(Space, Functions, Plan),
                 apply_type_revision(Space, Plan) ) ))).
 
 %Print compiled clause:
@@ -333,8 +358,10 @@ dynamic_arguments([argument(_, Value, Goal)|Plans], untyped, [Value|Args]) :-
 dynamic_target(Head, Pred, Bound) :- nonvar(Head), Head = partial(Base, Bound),
     atom(Base), is_list(Bound), !,
     current_translation_space(Space),
-    (space_call_target(Space, Base, Pred) -> true ; atom(Base), fun(Base), Pred = Base).
-dynamic_target(Head, Pred, []) :- atom(Head), callable_fun(Head, Pred).
+    (space_call_target(Space, Base, Pred) -> true ; atom(Base), fun(Base), Pred = Base),
+    runtime_callable(Pred).
+dynamic_target(Head, Pred, []) :- atom(Head), callable_fun(Head, Pred),
+    runtime_callable(Pred).
 
 dynamic_call(Space, Head, Plans, Out) :-
     with_translation_space(Space, dynamic_call(Head, Plans, Out)).
@@ -666,9 +693,24 @@ translate_expr([H0|T0], Goals, Out) :-
 % Compiler and runtime share the arity decision. Only invocation is caught
 % by dynamic reduction; an overapplication keeps its explicit domain error.
 application_plan(Fun, Args, Out, Plan) :- length(Args, N), Arity is N + 1,
-    ( arity(Fun, Arity) -> resolve_memoization(Fun, Args, Out, Goal), Plan = invoke(Goal)
+    ( arity(Fun, Arity)
+      -> ( defined_predicate_arity(Fun, Arity)
+           -> resolve_memoization(Fun, Args, Out, Goal)
+           ; Goal = deferred_registered_call(Fun, Args, Out) ),
+         Plan = invoke(Goal)
     ; incomplete_application_kind(Fun, Arity, partial) -> Plan = value(partial(Fun, Args))
     ; Plan = overapplied(Fun, N) ).
+
+% A source signature can precede its body. Preserve the expression until a
+% body exists, then use its actual compiled arity (including eta expansion).
+deferred_registered_call(Fun, Args, Out) :-
+    length(Args, N), Arity is N + 1,
+    ( defined_predicate_arity(Fun, Arity)
+      -> resolve_memoization(Fun, Args, Out, Goal), call(Goal)
+    ; arity(Fun, More), More > Arity, defined_predicate_arity(Fun, More)
+      -> Out = partial(Fun, Args)
+    ; ( space_fun(_, Source, Fun) -> true ; Source = Fun ),
+      Out = [Source|Args] ).
 
 build_call_or_partial(Fun, Args, Out, Inner, Extra, Goals) :-
     application_plan(Fun, Args, Out, Plan),
@@ -795,7 +837,8 @@ retranslate_clause(ConstrainArgs, Ref, Stored) :- stored_equation(Stored, Equati
                                                   erase(Ref),
                                                   retractall(translated_from(Ref, _, _)),
                                                   assertz(Clause, New),
-                                                  assertz(translated_from(New, '&self', Stored)).
+                                                  assertz(translated_from(New, '&self', Stored)),
+                                                  forget_provisional_arity('&self', Equation, Clause).
 
 %An arity that only the earlier translation compiled to, as for a body that was a partial application, goes:
 forget_unused_arities(Fun, Clauses) :-

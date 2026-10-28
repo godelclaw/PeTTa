@@ -52,8 +52,14 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
 %%A removal with an unknown function name must not erase program rows:
 'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
 'remove-atom'(Space, Term, true) :- atom(Space), Space \== '&self',
-                                    function_type_annotation_term(Term, F, _), !,
-                                    revise_function_type(Space, F, remove_sexp(Space, Term)).
+                                    nonvar(Term), Term = [Colon, _, _], Colon == ':', !,
+                                    findall(F,
+                                      ( copy_term(Term, [':', F, Type]),
+                                        match(Space, [':', F, Type], Type, Type),
+                                        function_type_annotation_term([':', F, Type], F, _) ),
+                                      Funs0),
+                                    sort(Funs0, Funs),
+                                    revise_function_types(Space, Funs, remove_sexp(Space, Term)).
 
 %%Remove a function atom:
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body],

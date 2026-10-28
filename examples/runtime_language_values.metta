@@ -14,3 +14,10 @@
                  (collapse (match $second (fact $x) $x)))) ())
 !(test (let* (($first (new-space)) ($second (new-space))) (== $first $second)) False)
 !(test (get-metatype unrelated-symbol) Symbol)
+!(test (get-metatype let) Grounded)
+!(test (get-metatype let*) Grounded)
+
+; The same syntax remains computational in authored patterns.
+!(test (case 3 (((let $x 1 (+ $x 2)) matched-case) ($_ missed))) matched-case)
+(= (computed-let-head (let $x 1 (+ $x 2))) matched-head)
+!(test (collapse (computed-let-head 3)) (matched-head))

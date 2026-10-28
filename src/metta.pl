@@ -537,7 +537,7 @@ register_fun(N) :- assertz(fun(N)),
                    sort(Arities0, Arities),
                    forall(member(Arity, Arities),
                           (arity(N, Arity) -> true ; assertz(arity(N, Arity)))).
-:- maplist(register_fun, [superpose, empty, '+','-','*','/', '%', min, max, 'change-state!', 'get-state', 'bind!',
+:- maplist(register_fun, [superpose, empty, let, 'let*', '+','-','*','/', '%', min, max, 'change-state!', 'get-state', 'bind!',
                           '<','>','@<', '@>', '==', '!=', '=', '=?', '<=', '>=', '@<=', '@>=', and, or, xor, implies, not, sqrt, exp, log, cos, sin,
                           'first-from-pair', 'second-from-pair', 'car-atom', 'cdr-atom', 'unique-atom', 'alpha-unique-atom',
                           repr, repra, parse, 'println!', 'readln!', test, assert, 'mm2-exec', atom_concat, atom_chars, copy_term, term_hash,

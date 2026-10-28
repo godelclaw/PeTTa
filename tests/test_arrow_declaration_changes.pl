@@ -164,13 +164,13 @@ test(arity_of_an_earlier_translation_is_forgotten, [setup(quiet)]) :-
     process_metta_string(
         "(= (ltc_eta_g $x $y) (pair $x $y))\n\c
          (= (ltc_eta_f $x) (ltc_eta_g $x))", _),
-    findall(A, arity(ltc_eta_f, A), Before), sort(Before, [2, 3]),
+    findall(A, arity(ltc_eta_f, A), Before), sort(Before, [3]),
     Type = [':', ltc_eta_f, ['->', '%Undefined%', 'Atom']],
     'add-atom'('&self', Type, true),
     findall(A, arity(ltc_eta_f, A), Held), sort(Held, [2]),
     once(ltc_eta_f(1, [ltc_eta_g, 1])),
     'remove-atom'('&self', Type, true),
-    findall(A, arity(ltc_eta_f, A), After), sort(After, [2, 3]).
+    findall(A, arity(ltc_eta_f, A), After), sort(After, [3]).
 
 test(higher_order_function_follows, [setup(quiet)]) :-
     process_metta_string(
