@@ -98,9 +98,11 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
 % predicate; reads of existing spaces pay nothing extra.
 space_call(Term) :- catch(Term, E, space_missing(E, Term)).
 
-space_missing(error(existence_error(procedure, Space/Arity), _), Term) :-
-    functor(Term, Space, Arity), !,
-    dynamic(Space/Arity),
+space_missing(error(existence_error(procedure, Missing), _), Term) :-
+    strip_module(Term, Module, Plain), functor(Plain, Space, Arity),
+    ( Missing == Space/Arity ; Missing == Module:Space/Arity ),
+    \+ current_predicate(Module:Space/Arity), !,
+    dynamic(Module:Space/Arity),
     fail.
 space_missing(Error, _) :- throw(Error).
 %Recognize (: Fun (-> ...)) in the space whose declarations the translator reads:

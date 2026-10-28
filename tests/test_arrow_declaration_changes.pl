@@ -302,4 +302,11 @@ test(unwritten_type_owner_remains_empty,
      [cleanup(abolish('$ltc_unwritten_types'/3))]) :-
     function_type_chains('$ltc_unwritten_types', absent_function, []).
 
+test(a_defined_owner_reporting_its_own_name_is_still_a_producer_fault,
+     [setup(assertz(('$ltc_fake_missing'(':', _, _) :-
+                       throw(error(existence_error(procedure, '$ltc_fake_missing'/3), lookup_test))), Ref)),
+      cleanup(erase(Ref)),
+      throws(error(existence_error(procedure, '$ltc_fake_missing'/3), lookup_test))]) :-
+    function_type_chains('$ltc_fake_missing', absent_function, _).
+
 :- end_tests(arrow_declaration_changes).
