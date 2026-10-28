@@ -347,7 +347,12 @@ revise_function_types(Space, Functions, Mutation) :-
               maplist(function_type_chains(Space), Functions, After),
               ( Before =@= After -> true
               ; type_revision_plan(Space, Functions, Plan),
-                apply_type_revision(Space, Plan) ) ))).
+                apply_type_revision(Space, Plan),
+                maplist(notify_type_revision(Space), Functions, Before, After) ) ))).
+
+notify_type_revision(Space, F, Before, After) :-
+    ( Before =@= After -> true
+    ; space_pred(Space, F, Pred), notify_function_changed(Pred) ).
 
 %Print compiled clause:
 maybe_print_compiled_clause(_, _, _) :- silent(true), !.
@@ -445,10 +450,10 @@ observe_application_head(Space, Head, Count) :- atom(Head), !,
     observe_function_call(Local, Arity),
     ( space_call_target(Space, Head, Pred), Pred \== Local
       -> observe_function_call(Pred, Arity) ; true ).
-observe_application_head(_, Head, Count) :- nonvar(Head),
+observe_application_head(Space, Head, Count) :- nonvar(Head),
     Head = partial(Base, Bound), atom(Base), is_list(Bound), !,
-    length(Bound, N), Arity is N + Count + 1,
-    observe_function_call(Base, Arity).
+    length(Bound, N), TotalCount is N + Count,
+    observe_application_head(Space, Base, TotalCount).
 observe_application_head(_, _, _).
 
 select_dynamic_call(_, data(Head), Count, _, Modes, data(Head)) :-
@@ -523,6 +528,8 @@ translate_expr([H0|T0], Goals, Out) :-
                                              note_translated_call(HV),
                                              append(T1,[Gs],Args),
                                              HookCall =.. [HV|Args],
+                                             length(Args, HookArity),
+                                             observe_function_call(HV, HookArity),
                                              call(HookCall),
                                              translate_expr(Gs, GsE, Out),
                                              append([GsH,GsT,GsE],Goals)
@@ -547,7 +554,7 @@ translate_expr([H0|T0], Goals, Out) :-
         ; HV == hyperpose, T = [L]
           -> ( nonvar(L), is_list(L)
                -> build_hyperpose_branches(L, Branches),
-                  append(GsH, [concurrent_and(member((Goal,Res), Branches), (call(Goal), Out = Res))], Goals)
+                  append(GsH, [parallel_answers(member((Goal,Res), Branches), (call(Goal), Out = Res))], Goals)
                ; translate_expr(L, GsL, LV),
                  append(GsH, GsL, Inner),
                  current_translation_space(HyperposeSpace),
@@ -712,7 +719,9 @@ translate_expr([H0|T0], Goals, Out) :-
                                      append(GsH, GsArgs, Inner),
                                      append(ArgsOut, [Out], CallArgs),
                                      Goal =.. [F|CallArgs],
-                                     append(Inner, [Goal], Goals)
+                                     length(CallArgs, CallArity),
+                                     Goals = [observe_function_call(F, CallArity)|Rest],
+                                     append(Inner, [Goal], Rest)
         %Produce a dynamic dispatch, translating Args for nesting:
         ; HV == reduce, T = [Expr] -> ( var(Expr) -> translate_expr(Expr, GsH, ExprOut),
                                                      reduce_goal(ExprOut, Out, ReduceGoal),
@@ -875,18 +884,13 @@ note_translated_call(Fun) :- ( translated_call(Fun) -> true ; assertz(translated
 %same transaction. An equation that is already running finishes as it was translated, as it does when an
 %equation is added or removed; what is called afterwards, also from that equation, runs the new clauses.
 %If a stored equation cannot be translated with the new declarations, nothing changes and this fails.
-%Nothing follows for a symbol that no stored equation depends on yet, such as a data constructor or a
-%function declared before it is defined:
+% A dynamic caller can observe a declaration even when its callee has no
+% authored clauses, so every changed declaration sends its notification.
 revise_arrow_declarations(Funs, Mutation) :-
-    ( member(Fun, Funs), decides_stored_equations(Fun)
-      -> with_mutex(arrow_declarations,
+    with_mutex(arrow_declarations,
                     transaction(( maplist(arrow_declarations, Funs, Befores),
                                   call(Mutation),
-                                  maplist(arrow_declarations_revised, Funs, Befores) )))
-       ; call(Mutation) ).
-
-decides_stored_equations(Fun) :- translated_call(Fun), !.
-decides_stored_equations(Fun) :- fun(Fun), ( existing_specialization(Fun, _) ; stored_clause(Fun, _, _, _) ), !.
+                                  maplist(arrow_declarations_revised, Funs, Befores) ))).
 
 %The clauses of Fun that were translated from stored equations, in clause order:
 stored_clause(Fun, Arity, Ref, Stored) :- findall(Known, arity(Fun, Known), Arities),
@@ -904,7 +908,8 @@ arrow_declarations_revised(Fun, Before) :-
     arrow_declarations(Fun, After),
     ( Before =@= After
       -> true
-       ; findall(Spec, existing_specialization(Fun, Spec), Specs),
+       ; notify_function_changed(Fun),
+         findall(Spec, existing_specialization(Fun, Spec), Specs),
          forall(member(Spec, Specs), ( retractall('&self'(:, Spec, _)),
                                        forall(match('&self', [':', Fun, TypeChain], TypeChain, TypeChain),
                                               add_sexp('&self', [':', Spec, TypeChain])) )),
@@ -962,7 +967,9 @@ forget_unused_arities(Fun, Clauses) :-
 %Handle data list:
 eval_data_term(X, [], X) :- (var(X); atomic(X)), !.
 eval_data_term([F|As], Goals, Val) :- ( atom(F), callable_fun(F, _) -> translate_expr([F|As], Goals, Val)
-                                                                              ; eval_data_list([F|As], Goals, Val) ).
+                                    ; eval_data_list([F|As], Inner, Val),
+                                      current_translation_space(Space), length(As, Count),
+                                      Goals = [observe_application_head(Space, F, Count)|Inner] ).
 
 %Handle data list entry:
 eval_data_list([], [], []).
@@ -1018,11 +1025,11 @@ build_hyperpose_branches([E|Es], [(Goal, Res)|Bs]) :- translate_expr_to_conj(E, 
 
 %Runtime hyperpose path for variable/computed list arguments.
 space_hyperpose_runtime(Space, Exprs, Out) :- is_list(Exprs),
-                                              concurrent_and(member(Expr, Exprs),
+                                              parallel_answers(member(Expr, Exprs),
                                                              eval(Expr, Space, Out)).
 
 hyperpose_runtime(Exprs, Out) :- is_list(Exprs),
-                                 concurrent_and(member(Expr, Exprs), eval(Expr, Out)).
+                                 parallel_answers(member(Expr, Exprs), eval(Expr, Out)).
 
 %Like membercheck but with direct equality rather than unification
 memberchk_eq(V, [H|_]) :- V == H, !.

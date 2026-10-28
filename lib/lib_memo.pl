@@ -57,6 +57,18 @@ metta_on_function_removed(Fun) :-
 :- multifile metta_on_call/2.
 metta_on_call(Fun, Arity) :- memo_record_dependency(Fun, Arity).
 
+:- multifile metta_worker_context/1.
+metta_worker_context(memo_with_worker_context(Parents)) :-
+    findall(Fun-Arity, metta_memo_call_ctx(Fun, Arity), Parents),
+    Parents \== [].
+
+:- meta_predicate memo_with_worker_context(+, 0).
+memo_with_worker_context(Parents, Goal) :-
+    reverse(Parents, OuterFirst),
+    setup_call_cleanup(maplist(memo_assert_parent, OuterFirst, Refs),
+                       Goal, maplist(erase, Refs)).
+memo_assert_parent(Fun-Arity, Ref) :- asserta(metta_memo_call_ctx(Fun, Arity), Ref).
+
 % Configuration API
 
 :- dynamic memo_strategy/1.

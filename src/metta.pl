@@ -443,7 +443,7 @@ call_goals([G|Gs]) :- call(G),
 
 %%% Prolog interop: %%%
 argv(K, Arg) :- current_prolog_flag(argv, Argv), nth0(K, Argv, A), ( atom_number(A, N) -> Arg = N ; Arg = A ).
-import_prolog_function(N, true) :- register_fun(N).
+import_prolog_function(N, true) :- register_fun(N), notify_function_changed(N).
 'Predicate'([F|Args], Term) :- Term =.. [F|Args].
 callPredicate(G, true) :- call(G).
 assertzPredicate(G, true) :- assertz(G).
@@ -529,9 +529,10 @@ importer_helper(Space, File) :-
 
 :- dynamic translator_rule/1.
 'add-translator-rule!'(HV, true) :- ( translator_rule(HV)
-                                      -> true ; assertz(translator_rule(HV)) ).
+                                      -> true
+                                    ; assertz(translator_rule(HV)), notify_function_changed(HV) ).
 
-'remove-translator-rule!'(HV, true) :- retractall(translator_rule(HV)).
+'remove-translator-rule!'(HV, true) :- retractall(translator_rule(HV)), notify_function_changed(HV).
 
 %%% Registration: %%%
 :- dynamic fun/1, arity/2.
