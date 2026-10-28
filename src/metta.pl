@@ -296,18 +296,22 @@ get_function_type([F|Args], T) :- nonvar(F), match('&self', [':',F,[->|Ts]], _, 
                                   checked_args(As, Args, As1, Args1),
                                   T = T0,
                                   maplist('get-type',Args1,As1).
-%As in typed calls, an argument declared %Undefined% is not checked. These parameters are found
-%before the requested type or another argument can bind a type variable to %Undefined%:
+%As in typed calls, literal %Undefined% and _ parameters are not checked.
+%Find them before a result request or another argument binds a type variable:
 checked_args([], [], [], []).
-checked_args([A|As], [X|Xs], Bs, Ys) :- ( A == '%Undefined%' -> Bs = Bs1, Ys = Ys1 ; Bs = [A|Bs1], Ys = [X|Ys1] ),
+checked_args([A|As], [X|Xs], Bs, Ys) :- ( (A == '%Undefined%' ; A == '_') -> Bs = Bs1, Ys = Ys1 ; Bs = [A|Bs1], Ys = [X|Ys1] ),
                                         checked_args(As, Xs, Bs1, Ys1).
 
 :- dynamic 'get-type'/2.
 %An unbound request takes each type of the value, or %Undefined% if it has none. %Undefined% is
 %confirmed only for a value without types or with %Undefined% among them:
-'get-type'(X, T) :- ( var(T) -> ( get_type_candidate(X, T0) *-> T = T0 ; T = '%Undefined%' )
-                    ; T == '%Undefined%' -> ( \+ get_type_candidate(X, _) -> true ; get_type_candidate(X, T) )
-                    ; get_type_candidate(X, T) ).
+'get-type'(X, T) :- type_candidate_answers(get_type_candidate(X), T).
+
+:- meta_predicate type_candidate_answers(1, ?).
+type_candidate_answers(Generator, T) :-
+    ( var(T) -> ( call(Generator, Candidate) *-> T = Candidate ; T = '%Undefined%' )
+    ; T == '%Undefined%' -> ( \+ call(Generator, _) -> true ; call(Generator, T) )
+    ; call(Generator, T) ).
 %An intrinsic kind is chosen before the requested type is compared:
 get_type_candidate(X, T) :- number(X), !, T = 'Number'.
 get_type_candidate(X, _) :- var(X), !.
@@ -321,12 +325,12 @@ get_type_candidate(X, T) :- \+ get_function_type(X, _),
 get_type_candidate(X, T) :- match('&self', [':',X,T], T, _).
 
 'space-get-type'(Space, X, T) :-
-    ( space_get_type_candidate(Space, X, T) *-> true ; T = '%Undefined%' ).
-space_get_type_candidate(_, X, 'Number') :- number(X), !.
+    type_candidate_answers(space_get_type_candidate(Space, X), T).
+space_get_type_candidate(_, X, T) :- number(X), !, T = 'Number'.
 space_get_type_candidate(_, X, _) :- var(X), !.
-space_get_type_candidate(_, X, 'String') :- string(X), !.
-space_get_type_candidate(_, true, 'Bool') :- !.
-space_get_type_candidate(_, false, 'Bool') :- !.
+space_get_type_candidate(_, X, T) :- string(X), !, T = 'String'.
+space_get_type_candidate(_, true, T) :- !, T = 'Bool'.
+space_get_type_candidate(_, false, T) :- !, T = 'Bool'.
 space_get_type_candidate(Space, X, T) :- space_get_function_type(Space, X, T).
 space_get_type_candidate(Space, X, T) :-
     \+ space_get_function_type(Space, X, _),
@@ -336,8 +340,10 @@ space_get_type_candidate(Space, X, T) :- match(Space, [':',X,T], T, _).
 
 space_get_function_type(Space, [F|Args], T) :- nonvar(F),
                                                match(Space, [':',F,[->|Types]], _, _),
-                                               append(ArgTypes, [T], Types),
-                                               maplist('space-get-type'(Space), Args, ArgTypes).
+                                               append(ArgTypes, [ResultType], Types),
+                                               checked_args(ArgTypes, Args, CheckedTypes, CheckedArgs),
+                                               T = ResultType,
+                                               maplist('space-get-type'(Space), CheckedArgs, CheckedTypes).
 'get-metatype'(X, 'Variable') :- var(X), !.
 'get-metatype'(X, 'Grounded') :- number(X), !.
 'get-metatype'(X, 'Grounded') :- string(X), !.
