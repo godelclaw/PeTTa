@@ -343,6 +343,7 @@ space_get_function_type(Space, [F|Args], T) :- nonvar(F),
 'get-metatype'(X, 'Grounded') :- string(X), !.
 'get-metatype'(true,  'Grounded') :- !.
 'get-metatype'(false, 'Grounded') :- !.
+'get-metatype'(X, 'Grounded') :- atom(X), created_space(X), !.
 'get-metatype'(X, 'Grounded') :- atom(X), fun(X), !.  % e.g., '+' is a registered fun/1
 'get-metatype'(X, 'Expression') :- is_list(X), !.     % e.g., (+ 1 2), (a b)
 'get-metatype'(X, 'Symbol') :- atom(X), !.            % e.g., a
@@ -536,7 +537,7 @@ register_fun(N) :- assertz(fun(N)),
                    sort(Arities0, Arities),
                    forall(member(Arity, Arities),
                           (arity(N, Arity) -> true ; assertz(arity(N, Arity)))).
-:- maplist(register_fun, [superpose, empty, let, 'let*', '+','-','*','/', '%', min, max, 'change-state!', 'get-state', 'bind!',
+:- maplist(register_fun, [superpose, empty, '+','-','*','/', '%', min, max, 'change-state!', 'get-state', 'bind!',
                           '<','>','@<', '@>', '==', '!=', '=', '=?', '<=', '>=', '@<=', '@>=', and, or, xor, implies, not, sqrt, exp, log, cos, sin,
                           'first-from-pair', 'second-from-pair', 'car-atom', 'cdr-atom', 'unique-atom', 'alpha-unique-atom',
                           repr, repra, parse, 'println!', 'readln!', test, assert, 'mm2-exec', atom_concat, atom_chars, copy_term, term_hash,
