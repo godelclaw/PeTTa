@@ -29,15 +29,8 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
                                  revise_function_type(Space, F, add_sexp(Space, Term)).
 
 %Add a function atom to its owner's compiled program:
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(Space), atom(FAtom), !,
-                                 add_sexp(Space, Term),
-                                 register_space_fun(Space, FAtom, Pred),
-                                 length(W, N),
-                                 Arity is N + 1,
-                                 assertz(arity(Pred,Arity)),
-                                 install_function_clause(Space, Term, Ref),
-                                 notify_function_changed(Pred),
-                                 (current_predicate(invalidate_specializations/1) -> invalidate_specializations(Pred) ; true),
+'add-atom'(Space, Term, true) :- Term = [=,[FAtom|_],_], atom(Space), atom(FAtom), !,
+                                 install_function_definition(Space, Term, Ref),
                                  ( silent(true) -> true
                                  ; clause(Head, Body, Ref),
                                    maybe_print_compiled_clause("added function", Term, (Head :- Body)) ).
@@ -65,7 +58,8 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
 %%Remove a function atom:
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body],
                                        atom(Space), atom(F), !,
-                                       remove_sexp(Space, Term),
+                                       revise_function_definition(Space, F,
+                                       (remove_sexp(Space, Term),
                                        space_pred(Space, F, Pred),
                                        ( retract(function_metadata(Pred, fun_meta(Args, Body))) -> true ; true ),
                                        uninstall_function_clauses(Space, Term, Refs),
@@ -76,7 +70,7 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
                                             retractall(space_fun(Space, F, Pred)),
                                             notify_function_removed(Pred)
                                          ; true ),
-                                       ( Refs = [] -> Removed = false ; Removed = true ).
+                                       ( Refs = [] -> Removed = false ; Removed = true ))).
 
 %Remove the type atoms matching a pattern, which may be arrow declarations of several functions:
 'remove-atom'(Space, Term, true) :- Space == '&self', nonvar(Term), Term = [Colon, Function, _],

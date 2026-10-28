@@ -11,7 +11,7 @@
 !(remove-atom &self (= (memo-dep-child $x) (+ $x 1)))
 !(test (collapse (memo-dep-parent 5)) (7))
 !(remove-atom &self (= (memo-dep-child $x) (+ $x 2)))
-!(test (collapse (memo-dep-parent 5)) ())
+!(test (collapse (memo-dep-parent 5)) (quote ((memo-dep-child 5))))
 !(add-atom &self (= (memo-dep-child $x) (+ $x 3)))
 !(test (collapse (memo-dep-parent 5)) (8))
 

@@ -33,7 +33,8 @@ translate_clause(Input, (Head :- BodyConj), ConstrainArgs) :-
                                                     ExpOut = BodyExpr
                                                   ; translate_expr(BodyExpr, GoalsBody, ExpOut) ),
                                                (  nonvar(ExpOut) , ExpOut = partial(Base,Bound)
-                                               -> arity(Base, Arity), length(Bound, N), M is (Arity - N) - 1,
+                                               -> arity(Base, Arity), defined_predicate_arity(Base, Arity),
+                                                  length(Bound, N), M is (Arity - N) - 1,
                                                   length(ExtraArgs, M), append(Bound, ExtraArgs, CallInArgs),
                                                   resolve_memoization(Base, CallInArgs, Out, Goal),
                                                   append(GoalsBody,[Goal],FinalGoals), append(Args1,ExtraArgs,HeadArgs)
@@ -115,6 +116,50 @@ install_function_clause(Space, Stored, Ref) :-
     assertz(Clause, Ref),
     assertz(translated_from(Ref, Space, Stored)),
     forget_provisional_arity(Space, Term, Clause).
+
+install_function_definition(Space, Term, Ref) :-
+    Term = [=, [F|Args], _],
+    revise_function_definition(Space, F,
+        ( add_sexp(Space, Term), register_space_fun(Space, F, Pred),
+          length(Args, N), Arity is N + 1, assertz(arity(Pred, Arity)),
+          install_function_clause(Space, Term, Ref),
+          notify_function_changed(Pred),
+          (current_predicate(invalidate_specializations/1)
+            -> invalidate_specializations(Pred) ; true) )).
+
+installed_arities(Pred, Arities) :-
+    findall(A, defined_predicate_arity(Pred, A), Raw), sort(Raw, Arities).
+
+% Source arities can change when a returned partial application is expanded.
+% Refresh consumers only when that executable interface actually changes.
+revise_function_definition(Space, F, Mutation) :-
+    space_pred(Space, F, Pred),
+    with_mutex(petta_type_revision,
+        transaction(( installed_arities(Pred, Before), call(Mutation),
+                      installed_arities(Pred, After),
+                      ( Before == After -> true
+                      ; refresh_definition_consumers(Space, F, [F]) ) ))).
+
+definition_consumers(Space, Callee, Callers) :-
+    findall(F,
+        ( translated_from(Ref, Space, Stored), clause(_, _, Ref),
+          stored_equation(Stored, [=, [F|Args], Body]), atom(F),
+          \+ existing_specialization(_, F),
+          source_mentions([Args, Body], Callee) ), Raw),
+    sort(Raw, Callers).
+
+refresh_definition_consumers(Space, F, Path) :-
+    definition_consumers(Space, F, Callers),
+    maplist(refresh_definition_consumer(Space, Path), Callers).
+
+refresh_definition_consumer(Space, Path, F) :-
+    function_recompile_entry(Space, F, Entry), space_pred(Space, F, Pred),
+    installed_arities(Pred, Before), recompile_function(Entry),
+    installed_arities(Pred, After),
+    ( Before == After -> true
+    ; memberchk(F, Path)
+      -> throw(error(domain_error(finite_application_interface, [F|Path]), none))
+    ; refresh_definition_consumers(Space, F, [F|Path]) ).
 
 forget_provisional_arity(Space, Term, Clause) :-
     Term = [=, [F|Args], _], space_pred(Space, F, Pred),
@@ -282,7 +327,12 @@ apply_type_revision(Space, Plan) :-
     Plan \= [],
     with_specialization_suppressed(
         ( ( Space == '&self' -> invalidate_all_specializations ; true ),
-          maplist(recompile_function, Plan) )).
+          maplist(recompile_type_entry, Plan) )).
+
+recompile_type_entry(Entry) :-
+    Entry = function(Space, F, Pred, _), installed_arities(Pred, Before),
+    recompile_function(Entry), installed_arities(Pred, After),
+    ( Before == After -> true ; refresh_definition_consumers(Space, F, [F]) ).
 
 % Type mutation, dependent recompilation and the compiler metadata facts are
 % one database transaction.
@@ -318,7 +368,8 @@ resolve_memoization(Fun, Args, Out, Goal) :-
     ; append(Args, [Out], DirectArgs),
       Goal =.. [Fun|DirectArgs]
     ).
-incomplete_application_kind(Fun, Arity, partial) :- ( arity(Fun, KnownArity), KnownArity >= Arity
+incomplete_application_kind(Fun, Arity, partial) :- ( arity(Fun, KnownArity), KnownArity >= Arity,
+                                                       defined_predicate_arity(Fun, KnownArity)
                                                      ; \+ arity(Fun, _) ), !.
 incomplete_application_kind(_, _, overapplied).
 
@@ -720,7 +771,7 @@ translate_expr([H0|T0], Goals, Out) :-
                ( UniqueTypeChains \= []
                  -> length(AllAVs, InputArity),
                     Arity is InputArity + 1,
-                    ( incomplete_application_kind(Fun, Arity, ApplicationKind), ApplicationKind == overapplied
+                    ( runtime_callable(Fun), incomplete_application_kind(Fun, Arity, ApplicationKind), ApplicationKind == overapplied
                       -> append(GsH, [throw_function_overapplication(Fun, InputArity)], Goals)
                        ; maplist({Fun,T,GsH,IsPartial,Bound,Out}/[TypeChain,BranchGoal]>>(
                                  typed_functioncall_branch(Fun, TypeChain, T, GsH, IsPartial, Bound, Out, BranchGoal)), UniqueTypeChains, Branches),
@@ -744,22 +795,24 @@ translate_expr([H0|T0], Goals, Out) :-
 % Compiler and runtime share the arity decision. Only invocation is caught
 % by dynamic reduction; an overapplication keeps its explicit domain error.
 application_plan(Fun, Args, Out, Plan) :- length(Args, N), Arity is N + 1,
-    ( arity(Fun, Arity)
-      -> ( defined_predicate_arity(Fun, Arity)
-           -> resolve_memoization(Fun, Args, Out, Goal)
-           ; Goal = deferred_registered_call(Fun, Args, Out) ),
+    ( \+ runtime_callable(Fun) -> Plan = deferred(Fun, Args, Out)
+    ; arity(Fun, Arity), defined_predicate_arity(Fun, Arity)
+      -> resolve_memoization(Fun, Args, Out, Goal),
          Plan = invoke(Goal)
     ; incomplete_application_kind(Fun, Arity, partial) -> Plan = value(partial(Fun, Args))
     ; Plan = overapplied(Fun, N) ).
 
 % A source signature can precede its body. Preserve the expression until a
 % body exists, then use its actual compiled arity (including eta expansion).
-deferred_registered_call(Fun, Args, Out) :-
-    length(Args, N), Arity is N + 1,
-    ( defined_predicate_arity(Fun, Arity)
-      -> resolve_memoization(Fun, Args, Out, Goal), call(Goal)
-    ; arity(Fun, More), More > Arity, defined_predicate_arity(Fun, More)
-      -> Out = partial(Fun, Args)
+deferred_registered_call(Fun, Args, Out, Extra) :-
+    ( runtime_callable(Fun)
+      -> application_plan(Fun, Args, Out, Plan),
+         ( Plan = invoke(Goal) -> call(Goal), call_goals(Extra)
+         ; Plan = value(Value) -> Out = Value
+         ; Plan = overapplied(F, N), throw_function_overapplication(F, N) )
+    % An installed predicate that was emptied by removal stays a failed call,
+    % just as in a caller translated after the original body was installed.
+    ; current_predicate(Fun/_) -> fail
     ; ( space_fun(_, Source, Fun) -> true ; Source = Fun ),
       Out = [Source|Args] ).
 
@@ -768,12 +821,14 @@ build_call_or_partial(Fun, Args, Out, Inner, Extra, Goals) :-
     length(Args, NArgs), Arity is NArgs + 1,
     Observed = [observe_function_call(Fun, Arity)|Inner],
     ( Plan = invoke(Goal) -> append(Observed, [Goal|Extra], Goals)
+    ; Plan = deferred(F, A, R) -> append(Observed, [deferred_registered_call(F, A, R, Extra)], Goals)
     ; Plan = value(Value) -> Out = Value, Goals = Observed
     ; Plan = overapplied(F, N), append(Observed, [throw_function_overapplication(F, N)], Goals) ).
 
 run_dynamic_application(Fun, Args, Out, Extra) :-
     application_plan(Fun, Args, Out, Plan),
     ( Plan = invoke(Goal) -> catch(call(Goal), _, fail), call_goals(Extra)
+    ; Plan = deferred(F, A, R) -> deferred_registered_call(F, A, R, Extra)
     ; Plan = value(Value) -> Out = Value
     ; Plan = overapplied(F, N), throw_function_overapplication(F, N) ).
 

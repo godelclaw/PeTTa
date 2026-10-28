@@ -275,6 +275,33 @@ test(compiler_metadata_stays_with_the_thread_that_translated, [setup(quiet)]) :-
     thread_join(Thread, Status),
     Status == true.
 
+test(definition_interface_refresh_preserves_unrelated_compiled_clause, [setup(quiet)]) :-
+    process_metta_string(
+        "(= (ltc_di_target $x) (+ $x 1))\n\c
+         (= (ltc_di_use) (ltc_di_target 5))\n\c
+         (= (ltc_di_other $x) (+ $x 100))", _),
+    clause(ltc_di_other(_, _), _, Ref),
+    'remove-atom'('&self', [=, [ltc_di_target, X], [+, X, 1]], true),
+    once(ltc_di_use([ltc_di_target, 5])),
+    'add-atom'('&self', [=, [ltc_di_target, Y, Z], [+, Y, Z]], true),
+    once(eval([[ltc_di_use], 2], 7)),
+    clause(ltc_di_other(_, _), _, Ref).
+
+test(cyclic_expansion_refusal_rolls_back_definition_and_consumers, [setup(quiet)]) :-
+    process_metta_string(
+        "(= (ltc_cycle_f $x $y) (ltc_cycle_g $x))", _),
+    compiler_snapshot(Before),
+    catch('add-atom'('&self', [=, [ltc_cycle_g, X], [ltc_cycle_f, X]], true), Error, true),
+    Error = error(domain_error(finite_application_interface, _), _),
+    compiler_snapshot(After), Before =@= After,
+    \+ match('&self', [=, [ltc_cycle_g, _], _], true, true).
+
+test(recursive_calls_with_stable_arity_are_not_rejected, [setup(quiet)]) :-
+    process_metta_string(
+        "(= (ltc_cycle_ok_f $x) (if (== $x 0) done (ltc_cycle_ok_g (- $x 1))))\n\c
+         (= (ltc_cycle_ok_g $x) (ltc_cycle_ok_f $x))", _),
+    once(ltc_cycle_ok_f(4, done)).
+
 test(named_eta_atom_result_refuses_the_retired_extra_arity,
      [setup(quiet),
       throws(error(domain_error(function_input_arities(_, [1]), 2), _))]) :-
