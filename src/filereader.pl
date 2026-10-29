@@ -98,14 +98,21 @@ process_form(Space, compile_functions, parsed(function, FormStr, Term), []) :- T
                                                                          translate_clause(Term, Clause),
                                                                          assertz(Clause, Ref),
                                                                          assertz(translated_from(Ref, Term)),
-                                                                         assertz(compiled_row(RowRef, Ref)) )),
+                                                                         assertz(compiled_row(RowRef, Ref)),
+                                                                         capture_clause_display(Ref, Display) )),
                                                             metta_on_function_changed(F),
-                                                            ( silent(true) -> true ; format("\e[33m--> metta function -->~n\e[36m~w~n\e[33m--> prolog clause -->~n\e[32m", [FormStr]),
-                                                                                     clause(Head, Body, Ref),
-                                                                                     ( Body == true -> Show = Head; Show = (Head :- Body) ),
+                                                            ( Display == silent -> true ; Display = clause(Show),
+                                                                                     format("\e[33m--> metta function -->~n\e[36m~w~n\e[33m--> prolog clause -->~n\e[32m", [FormStr]),
                                                                                      portray_clause(current_output, Show),
                                                                                      format("\e[33m^^^^^^^^^^^^^^^^^^^^^^~n\e[0m") ).
 process_form(_, _, In, _) :- format(atom(Msg), "failed to process form: ~w", [In]), throw(error(syntax_error(Msg), none)).
+
+% Copy the printable clause while its reference is protected. Formatting runs
+% after the lock is released and must not dereference a concurrently erased clause.
+capture_clause_display(Ref, Display) :-
+    ( silent(true) -> Display = silent
+    ; clause(Head, Body, Ref), ( Body == true -> Show = Head ; Show = (Head :- Body) ),
+      Display = clause(Show) ).
 
 %Like blanks but counts newlines:
 newlines(C0, C2) --> blanks_to_nl, !, {C1 is C0+1}, newlines(C1,C2).
