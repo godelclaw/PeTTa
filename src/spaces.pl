@@ -23,7 +23,7 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
 
 %Add a function atom. Definitions are added and removed under one lock, so a
 %removal never takes a row before the clause it owns is recorded:
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
+'add-atom'(Space, Term, true) :- Term = [Eq,[FAtom|W],_], Eq == (=), atom(FAtom), !,
                                  with_mutex(petta_definitions, add_function_atom(Space, Term, FAtom, W)).
 
 %Add an atom to the space:
@@ -41,17 +41,26 @@ add_function_atom(Space, Term, FAtom, W) :- add_sexp(Space, Term, RowRef),
                                             metta_on_function_changed(FAtom),
                                             maybe_print_compiled_clause("added function", Term, Clause).
 
-%%A removal with an unknown function name must not erase program rows:
-'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
+%%A removal that may take definitions of an unknown function must not erase
+%%program rows:
+'remove-atom'(_, Term, _) :- may_take_definition(Term, F), var(F), !, instantiation_error(F).
 
-%%Remove a function atom. The rows it takes from this space decide the answer,
-%%as for any atom, and a row takes a clause with it only if it was compiled:
-%%(= $h 1) is data, and an imported copy in a second space has no clause.
-'remove-atom'(Space, Term, Removed) :- Term = [=,[F|_],_], atom(F), !,
+%%Remove atoms that may include definitions. The rows taken from this space
+%%decide the answer, as for any atom, and a row takes a clause with it only if
+%%it was compiled: (= $h 1) is data, and an imported copy in a second space has
+%%no clause. An unbound operator, as in ($op (f 1) 2), takes data and
+%%definitions alike:
+'remove-atom'(Space, Term, Removed) :- may_take_definition(Term, F), atom(F), !,
                                        with_mutex(petta_definitions, remove_function_atom(Space, Term, F, Removed)).
 
 %Remove all same atoms, reporting whether there were any, as for a function atom:
 'remove-atom'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).
+
+%A pattern may take a definition when it has three elements, its operator is =
+%or unbound, and its head is unbound or an expression. F is the function name,
+%unbound if unknown. The test binds nothing in the pattern:
+may_take_definition(Term, F) :- is_list(Term), Term = [Eq, Head, _], ( var(Eq) -> true ; Eq == (=) ),
+                                ( var(Head) -> true ; Head = [F|_] ).
 
 remove_function_atom(Space, Term, F, Removed) :- Term = [Rel|Args], Row =.. [Space, Rel|Args],
                                                  findall(ClauseRef-Compiled, take_row(Row, ClauseRef, Compiled), Taken),
