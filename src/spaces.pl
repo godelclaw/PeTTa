@@ -188,9 +188,9 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 %%definitions alike. Definition changes share one lock, so a row's clause is
 %%never read while a recompilation replaces it:
 'remove-atom'(Space, Term, Removed) :- may_take_definition(Term, F), atom(F), !,
-                                       Term = [_, [_|Args], Body],
+                                       Term = [_, [_|Args], _],
                                        with_mutex(petta_dependency_graph,
-                                                  remove_function_atom(Space, Term, F, Args, Body, Removed)).
+                                                  remove_function_atom(Space, Term, F, Args, Removed)).
 
 %Remove all same atoms, reporting whether there were any, as for a function atom:
 'remove-atom'(Space, Term, Removed) :-
@@ -203,14 +203,18 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 may_take_definition(Term, F) :- is_list(Term), Term = [Eq, Head, _], ( var(Eq) -> true ; Eq == (=) ),
                                 ( var(Head) -> true ; Head = [F|_] ).
 
-remove_function_atom(Space, Term, F, Args, Body, Removed) :-
+remove_function_atom(Space, Term, F, Args, Removed) :-
     Term = [Rel|RowArgs], Row =.. [Space, Rel|RowArgs],
     findall(ClauseRef-Compiled, take_row(Row, ClauseRef, Compiled), Taken),
     ( Taken == [] -> Removed = false
     ; Removed = true,
       findall(R, member(R-true, Taken), ClauseRefs),
       ( ClauseRefs == [] -> true
-      ; forget_function_rows(F, Args, Body, ClauseRefs) ) ).
+      ; forget_function_rows(F, Args, ClauseRefs) ) ).
+
+forget_function_metadata(F) :- catch(nb_delete(F), _, true),
+                               retractall(inferred_fn_type(F, _, _)),
+                               retractall(det_bound_proviso(F, _, _, _)).
 
 %Take a row that Row unifies with, and the clause it owns if it was compiled.
 %Erasing the row is the claim: of several threads, one takes it.
@@ -223,21 +227,23 @@ erase_owned_clause(ClauseRef) :- retractall(translated_from(ClauseRef, _)),
                                  forget_compiled_dependencies(ClauseRef),
                                  erase(ClauseRef).
 
-forget_function_rows(F, Args, Body, ClauseRefs) :-
-    ( atom(F), nb_current(F, Prev) -> true ; Prev = [] ),
-    (   select(Meta, Prev, Rest),
-        Meta = fun_meta(Args0, Body0, _),
-        Args0 =@= Args,
-        Body0 =@= Body
-        -> ( Rest == [] -> nb_delete(F)
-                         ; nb_setval(F, Rest) ) ; true ),
+%A function's metadata - the equations specialization reads, inferred types,
+%determinism provisos - follows the clauses that remain. It goes with the last
+%clause; when the removed arity has none left but another arity has, it is
+%rebuilt from those, and otherwise notify_mutation/1 rebuilds the function.
+forget_function_rows(F, Args, ClauseRefs) :-
     maplist(erase_owned_clause, ClauseRefs),
     metta_on_function_changed(F),
     invalidate_specializations(F),
     length(Args, N),
+    Arity is N + 1,
+    functor(Head, F, Arity),
     ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
-      -> retractall(fun(F)), metta_on_function_removed(F)
-      ; true ),
+      -> retractall(fun(F)), metta_on_function_removed(F),
+         forget_function_metadata(F)
+    ; \+ clause(Head, _, _)
+      -> recompile_function_clauses(F)
+    ; true ),
     % Callable classification is part of the
     % unified call contract.  Drop the last
     % fun/1 marker before rebuilding callers
