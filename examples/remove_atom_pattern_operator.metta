@@ -1,7 +1,7 @@
 ; Choosing how to add or remove an atom binds nothing in it.
 
-; ($op (foo 1) 2) takes every row it unifies with, data and definitions alike,
-; and leaves $op unbound:
+; ($op (foo 1) 2) takes a row it unifies with, data or a definition, and leaves
+; $op unbound:
 !(add-atom &d1 (rel (foo 1) 2))
 !(test (let $r (remove-atom &d1 ($op (foo 1) 2)) ($r (is-var $op))) (True True))
 !(test (collapse (get-atoms &d1)) ())

@@ -1,5 +1,5 @@
-; remove-atom says whether it removed anything: True if a row of the space went,
-; False if none did.
+; remove-atom removes one row and says whether it did: True if a row of the space
+; went, False if none did.
 !(test (remove-atom &rows (foo 1)) False)
 !(add-atom &rows (foo 1))
 !(add-atom &rows (foo 2))
@@ -7,13 +7,22 @@
 !(test (remove-atom &rows (foo 1)) False)
 !(test (collapse (match &rows (foo $x) $x)) (2))
 
-; A pattern removes every row it unifies with, and leaves its variables unbound:
+; A pattern removes one row it unifies with, and leaves its variables unbound:
 !(add-atom &rows (foo 3))
 !(test (remove-atom &rows (foo $x)) True)
-!(test (collapse (match &rows (foo $x) $x)) ())
+!(test (collapse (match &rows (foo $x) $x)) (3))
+!(test (remove-atom &rows (foo $x)) True)
 !(test (remove-atom &rows (foo $x)) False)
 !(add-atom &rows (foo 4))
 !(test (let $removed (remove-atom &rows (foo $y)) (is-var $y)) True)
+
+; An atom stored twice loses one copy at a time:
+!(add-atom &rows (dup 1))
+!(add-atom &rows (dup 1))
+!(test (remove-atom &rows (dup 1)) True)
+!(test (collapse (match &rows (dup $x) $x)) (1))
+!(test (remove-atom &rows (dup 1)) True)
+!(test (remove-atom &rows (dup 1)) False)
 
 ; Numbers, strings and symbols report the same way:
 !(add-atom &rows 42)
@@ -24,6 +33,13 @@
 (= (f 1) 2)
 !(test (remove-atom &self (= (f 1) 2)) True)
 !(test (remove-atom &self (= (f 1) 2)) False)
+
+; A definition stored twice keeps one copy, and its clause, after one removal:
+(= (twice-def) 5)
+(= (twice-def) 5)
+!(test (collapse (twice-def)) (5 5))
+!(test (remove-atom &self (= (twice-def) 5)) True)
+!(test (collapse (twice-def)) (5))
 
 ; Removing a definition from a space without it answers False and changes nothing:
 (= (g2 1) 2)

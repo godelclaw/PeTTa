@@ -11,14 +11,15 @@ add_sexp(Space, Atom, Ref) :- ( var(Atom) -> instantiation_error(Atom)
                              ; Atom = [Rel|Args] -> Term =.. [Space, Rel | Args], assertz(Term, Ref)
                              ; must_be(atom, Space), assertz(space_primitive(Space, Atom), Ref) ).
 
-%Same but for removal, of every row the atom unifies with. Removed says whether
-%there was one: the first retract decides it atomically, so of several threads
-%removing the same row exactly one is told true. Pattern variables stay unbound:
+%Same but for removal, of one row the atom unifies with, even when the same
+%atom is stored twice. Removed says whether there was one: the retract decides
+%it atomically, so of several threads removing the same row exactly one is told
+%true. Pattern variables stay unbound:
 remove_sexp(Space, Atom) :- remove_sexp(Space, Atom, _).
 remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
                                     ; Atom = [Rel|Args] -> Term =.. [Space, Rel | Args]
                                     ; must_be(atom, Space), Term = space_primitive(Space, Atom) ),
-                                    ( \+ \+ retract(Term) -> retractall(Term), Removed = true
+                                    ( \+ \+ retract(Term) -> Removed = true
                                                           ; Removed = false ).
 
 %Add a function atom. Definitions are added and removed under one lock, so a
@@ -45,15 +46,15 @@ add_function_atom(Space, Term, FAtom, W) :- add_sexp(Space, Term, RowRef),
 %%program rows:
 'remove-atom'(_, Term, _) :- may_take_definition(Term, F), var(F), !, instantiation_error(F).
 
-%%Remove atoms that may include definitions. The rows taken from this space
-%%decide the answer, as for any atom, and a row takes a clause with it only if
-%%it was compiled: (= $h 1) is data, and an imported copy in a second space has
-%%no clause. An unbound operator, as in ($op (f 1) 2), takes data and
-%%definitions alike:
+%%Remove an atom that may be a definition. The row taken from this space
+%%decides the answer, as for any atom, and takes a clause with it only if it was
+%%compiled: (= $h 1) is data, and an imported copy in a second space has no
+%%clause. An unbound operator, as in ($op (f 1) 2), may take data or a
+%%definition:
 'remove-atom'(Space, Term, Removed) :- may_take_definition(Term, F), atom(F), !,
                                        with_mutex(petta_definitions, remove_function_atom(Space, Term, F, Removed)).
 
-%Remove all same atoms, reporting whether there were any, as for a function atom:
+%Remove one same atom, reporting whether there was one, as for a function atom:
 'remove-atom'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).
 
 %A pattern may take a definition when it has three elements, its operator is =
@@ -62,17 +63,18 @@ add_function_atom(Space, Term, FAtom, W) :- add_sexp(Space, Term, RowRef),
 may_take_definition(Term, F) :- is_list(Term), Term = [Eq, Head, _], ( var(Eq) -> true ; Eq == (=) ),
                                 ( var(Head) -> true ; Head = [F|_] ).
 
-remove_function_atom(Space, Term, F, Removed) :- Term = [Rel|Args], Row =.. [Space, Rel|Args],
-                                                 findall(ClauseRef-Compiled, take_row(Row, ClauseRef, Compiled), Taken),
-                                                 ( Taken == [] -> Removed = false
-                                                 ; Removed = true,
-                                                   findall(R, member(R-true, Taken), ClauseRefs),
-                                                   ( ClauseRefs == [] -> true
-                                                   ; maplist(erase_owned_clause, ClauseRefs),
-                                                     notify_function_changed(F),
-                                                     ( \+ ( user_dynamic_head(F, _, H2), clause(H2, _, _) )
-                                                       -> retractall(fun(F)), notify_function_removed(F)
-                                                       ; true ) ) ).
+%Taking the row binds a copy of the pattern, never the pattern itself:
+remove_function_atom(Space, Term, F, Removed) :- copy_term(Term, [Rel|Args]), Row =.. [Space, Rel|Args],
+                                                 ( take_row(Row, ClauseRef, Compiled)
+                                                   -> Removed = true,
+                                                      ( Compiled == true
+                                                        -> erase_owned_clause(ClauseRef),
+                                                           notify_function_changed(F),
+                                                           ( \+ ( user_dynamic_head(F, _, H2), clause(H2, _, _) )
+                                                             -> retractall(fun(F)), notify_function_removed(F)
+                                                             ; true )
+                                                      ; true )
+                                                 ; Removed = false ).
 
 %Only dynamic predicates defined in user hold compiled MeTTa clauses; static or
 %imported built-ins of the same name (such as plus/3 or nl/0) are skipped:
@@ -81,8 +83,8 @@ user_dynamic_head(F, A, Head) :- current_predicate(F/A),
                                  predicate_property(Head, dynamic),
                                  \+ predicate_property(Head, imported_from(_)).
 
-%Take a row that Row unifies with, and the clause it owns if it was compiled.
-%Erasing the row is the claim: of several threads, one takes it.
+%Take the first row that Row unifies with and that no other thread took first,
+%and the clause it owns if it was compiled. Erasing the row is the claim.
 take_row(Row, ClauseRef, Compiled) :- clause(Row, true, RowRef), erase(RowRef),
                                       ( retract(compiled_row(RowRef, ClauseRef)) -> Compiled = true
                                                                                  ; Compiled = false ).
