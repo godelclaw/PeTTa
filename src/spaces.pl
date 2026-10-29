@@ -1,8 +1,9 @@
 :- dynamic space_primitive/2.
 
-%compiled_row(RowRef, ClauseRef): the stored row owns this exact compiled clause.
-%A definition imported into a second space is stored there without one.
+%compiled_row(RowRef, ClauseRef): the stored row supports the compiled clause.
+%Imported copies share a clause; explicit duplicate equations have distinct clauses.
 :- dynamic compiled_row/2.
+:- dynamic source_row/2.
 
 %Since both normal add-attom call and function additions needs to add the S-expression:
 %Nonempty expressions keep their indexed rows; other atoms are stored separately, so
@@ -57,7 +58,9 @@ retract_reporting(Term, Removed) :-
 %Add an atom to the space:
 'add-atom'(Space, Term, true) :-
     typed_space_runtime_value_ok(Space, Term),
-    add_sexp(Space, Term).
+    ( may_take_declaration(Space, Term)
+      -> with_mutex(petta_dependency_graph, add_sexp(Space, Term))
+    ; add_sexp(Space, Term) ).
 
 add_function_atom(Space, Term, FAtom, W) :-
     length(W, SourceArity),
@@ -141,7 +144,7 @@ cleanup_runtime_function_add(F,
     unified_checker_cache:unified_summary_cache_store_many(CacheEntries).
 
 snapshot_runtime_function_clauses(F, Clauses) :-
-    findall(runtime_compiled_clause(Source, Head, Body, Origin, Dependencies, Owner),
+    findall(runtime_compiled_clause(Source, Head, Body, Origin, Dependencies, Owners),
             ( translated_from(Ref, Source),
               runtime_source_key(Source, F/_),
               clause(Head, Body, Ref),
@@ -149,7 +152,7 @@ snapshot_runtime_function_clauses(F, Clauses) :-
               ( compiled_deps(Ref, _, _, StoredDependencies)
                 -> Dependencies = StoredDependencies
               ; Dependencies = [] ),
-              ( compiled_row(RowRef, Ref) -> Owner = RowRef ; Owner = none ) ),
+              findall(RowRef, compiled_row(RowRef, Ref), Owners) ),
             Clauses).
 
 restore_runtime_function_clauses(F, Clauses) :-
@@ -167,11 +170,11 @@ restore_runtime_function_clauses(F, Clauses) :-
 
 restore_runtime_compiled_clauses([]).
 restore_runtime_compiled_clauses(
-        [runtime_compiled_clause(Source, Head, Body, Origin, Dependencies, Owner)
+        [runtime_compiled_clause(Source, Head, Body, Origin, Dependencies, Owners)
          |Clauses]) :-
     assertz((Head :- Body), Ref),
     assertz(translated_from(Ref, Source)),
-    ( Owner == none -> true ; assertz(compiled_row(Owner, Ref)) ),
+    forall(member(Owner, Owners), assertz(compiled_row(Owner, Ref))),
     runtime_source_key(Source, Key),
     record_compiled_dependencies(Ref, Key, Origin, Dependencies),
     restore_runtime_compiled_clauses(Clauses).
@@ -184,10 +187,10 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 'remove-atom'(_, Term, _) :- may_take_definition(Term, F), var(F), !, instantiation_error(F).
 
 %%Remove an atom that may be a definition. The row taken from this space
-%%decides the answer, as for any atom, and takes a clause with it only if it was
-%%compiled: (= $h 1) is data, and an imported copy in a second space has no
-%%clause. An unbound operator, as in ($op (f 1) 2), may take data or a
-%%definition. Definition changes share one lock, so a row's clause is
+%%decides the answer, as for any atom. Its clause goes only when no supporting
+%%row remains: (= $h 1) is data, while imported copies share a clause.
+%%An unbound operator, as in ($op (f 1) 2), may take data or a definition.
+%%Definition changes share one lock, so a row's clause is
 %%never read while a recompilation replaces it:
 'remove-atom'(Space, Term, Removed) :- may_take_definition(Term, F), atom(F), !,
                                        typed_space_runtime_value_ok(Space, Term),
@@ -219,12 +222,14 @@ forget_function_metadata(F) :- catch(nb_delete(F), _, true),
                                retractall(det_bound_proviso(F, _, _, _)).
 
 %Take the first row that Row unifies with and that no other thread took first,
-%and the clause it owns if it was compiled. Erasing the row is the claim.
+%and whether its clause lost its last support. Erasing the row is the claim.
 take_row(Row, ClauseRef, Compiled, Declaration) :- clause(Row, true, RowRef),
                                       row_declaration_removal(Row, RowRef, Declaration),
                                       erase(RowRef),
-                                      ( retract(compiled_row(RowRef, ClauseRef)) -> Compiled = true
-                                                                                 ; Compiled = false ).
+                                      retractall(source_row(_, RowRef)),
+                                      ( retract(compiled_row(RowRef, ClauseRef))
+                                        -> ( compiled_row(_, ClauseRef) -> Compiled = false ; Compiled = true )
+                                      ; Compiled = false ).
 
 % Only actual declaration rows affect the cache. Snapshot their store identity
 % and normalized keys before removing aliases changes the type environment.
@@ -243,7 +248,7 @@ remove_declaration_rows(Pattern, Removed) :-
 uncache_removed_declarations(Declarations) :-
     with_decl_notifications_batched(maplist(uncache_type_decl_snapshot, Declarations)).
 
-%Erase the clause a removed row owned, with its record and dependencies:
+%Erase an unsupported clause, with its record and dependencies:
 erase_owned_clause(ClauseRef) :- retractall(translated_from(ClauseRef, _)),
                                  forget_compiled_dependencies(ClauseRef),
                                  erase(ClauseRef).

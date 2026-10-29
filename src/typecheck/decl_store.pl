@@ -589,7 +589,9 @@ snapshot_type_decl_removal(Name, Type, function(Name, N, scheme(ATN, OTN), Effec
     canonical_effect_model(Det, ATN, Effect), length(ATN, N).
 snapshot_type_decl_removal(Name, Type, value(Name, TN)) :- normalize_type(Type, TN).
 
-uncache_type_decl_snapshot(none).
+uncache_type_decl_snapshot(none) :- !.
+uncache_type_decl_snapshot(Snapshot) :- type_decl_snapshot_supported(Snapshot), !.
+
 uncache_type_decl_snapshot(kind(Name, Keyword, Value)) :-
     ( kind_decl_clause(Name, Keyword, Value, Ref)
       -> ( Keyword == 'Alias'
@@ -613,6 +615,15 @@ uncache_type_decl_snapshot(value(Name, TN)) :-
          decl_notify(declaration_changed(value, Name, removed)),
          notify_removed_value_constructor(Name, TN)
     ; true ).
+
+% Equal declarations share a cache entry. Remove-one must retain it until its
+% last actual supporting row goes; an open data row is not a declaration.
+type_decl_snapshot_supported(Snapshot) :-
+    compound(Snapshot), arg(1, Snapshot, Name), atom(Name),
+    Goal =.. ['&self', (:), Name, _], clause(Goal, true, Ref),
+    clause(Stored, true, Ref), Stored =.. [_, Tag, StoredName, Type],
+    Tag == (:), StoredName == Name,
+    snapshot_type_decl_removal(Name, Type, Candidate), Candidate =@= Snapshot.
 
 notify_removed_value_constructor(Name, T) :-
     ( atom(T), \+ primitive_type(T), \+ wildcard_type(T)

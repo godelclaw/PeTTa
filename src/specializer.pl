@@ -117,7 +117,7 @@ specializable_arg(Arg) :- nonvar(Arg),
 
 %Forget function symbol:
 forget_symbol(Name) :- forall(clause('&self'(=, [Name|_], _), true, RowRef),
-                              ( retractall(compiled_row(RowRef, _)), ignore(erase(RowRef)) )),
+                              ( retractall(compiled_row(RowRef, _)), retractall(source_row(_, RowRef)), ignore(erase(RowRef)) )),
                        retractall('&self'(:, Name, _)),
                        forget_symbol_types(Name),
                        findall(Ref, ( user_dynamic_head(Name, _, H), clause(H, _, Ref) ), Refs),

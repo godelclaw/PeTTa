@@ -1,0 +1,10 @@
+; Restoring a rejected addition preserves every imported support link.
+!(import! &self imports/shared_support)
+!(import! &copy imports/shared_support)
+!(test (let (Error $e $kind)
+          (catch (add-atom &self (= (support-typed "bad") "bad"))) $kind) typecheck)
+!(test (support-typed 1) 2)
+!(test (remove-atom &self (= (support-typed $x) (+ $x 1))) True)
+!(test (support-typed 1) 2)
+!(test (remove-atom &copy (= (support-typed $x) (+ $x 1))) True)
+!(test (== (support-typed 1) 2) False)

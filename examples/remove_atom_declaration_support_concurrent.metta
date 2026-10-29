@@ -1,0 +1,11 @@
+; Declaration rows and their deduplicated cache are updated under one lock.
+(= (decl-add $n) (if (== $n 0) ()
+    (let $_ (add-atom &self (: churn-declaration (-> Number Number))) (decl-add (- $n 1)))))
+(= (decl-drop $n) (if (== $n 0) ()
+    (let $_ (remove-atom &self (: churn-declaration (-> Number Number))) (decl-drop (- $n 1)))))
+(= (decl-drain) (if (remove-atom &self (: churn-declaration (-> Number Number))) (decl-drain) done))
+!(hyperpose ((decl-add 100) (decl-drop 100) (decl-add 100) (decl-drop 100)))
+!(test (decl-drain) done)
+!(test (collapse (match &self (: churn-declaration $t) $t)) ())
+!(test (add-atom &self (= (churn-declaration "hi") "ok")) True)
+!(test (churn-declaration "hi") "ok")

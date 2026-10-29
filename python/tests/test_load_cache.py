@@ -82,3 +82,22 @@ def test_predicate_larger_than_a_chunk_replays(repo_root, tmp_path):
 
     assert cold == warm == ["results []", "value ['0', '999', '1000', '2499']"]
     assert len(list(cache.iterdir())) == 1
+
+
+def test_imported_support_survives_cached_loads(repo_root, tmp_path):
+    library = tmp_path / "supported.metta"
+    library.write_text("(= (retained $x) (+ $x 1))\n!(println! loading)\n")
+    cache = tmp_path / "cache"
+    query = (f"!(import! &copy {library}) "
+             "!(remove-atom &self (= (retained $x) (+ $x 1))) "
+             "!(retained 41)")
+    cold = load_in_fresh_process(repo_root, library, cache, query)
+    warm = load_in_fresh_process(repo_root, library, cache, query)
+    assert cold.count("loading") == 2
+    # The replay-specific test above checks cache eligibility. Here the contract
+    # is correct shared support through the cached-load API, including fallback.
+    assert warm.count("loading") in (1, 2)
+    expected = ["results ['true']", "value ['true', 'true', '42']"]
+    assert [line for line in cold if line != "loading"] == expected
+    assert [line for line in warm if line != "loading"] == expected
+    assert len(list(cache.iterdir())) == 1

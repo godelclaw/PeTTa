@@ -1,0 +1,12 @@
+; Recompilation must move all support links, including imported copies.
+!(import! &self (library lib_memo))
+!(import! &self imports/shared_support)
+!(import! &copy imports/shared_support)
+!(test (memoize support-k) True)
+!(test (support-k 1) 3)
+!(test (remove-atom &self (= (support-k 1) 3)) True)
+!(test (support-k 1) 3)
+!(test (remove-atom &copy (= (support-k 1) 3)) True)
+!(test (is-memoized support-k) False)
+!(test (== (support-k 1) 3) False)
+!(test (collapse (support-dup)) (a b a))
