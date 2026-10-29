@@ -48,7 +48,7 @@ retract_reporting(Term, Removed) :-
 %atom, registration, metadata and compiled-dependency state. It runs under the
 %lock that definition changes share (notify_mutations/1), so removals never see
 %the interval between staging and cleanup; other observers still can.
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
+'add-atom'(Space, Term, true) :- Term = [Eq,[FAtom|W],_], Eq == (=), atom(FAtom), !,
                                  with_mutex(petta_dependency_graph,
                                             add_function_atom(Space, Term, FAtom, W)).
 
@@ -176,15 +176,18 @@ restore_runtime_compiled_clauses(
 runtime_source_key([Eq, [F|Args], _], F/N) :-
     Eq == (=), atom(F), is_list(Args), length(Args, N).
 
-%%A removal with an unknown function name must not erase program rows:
-'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
+%%A removal that may take definitions of an unknown function must not erase
+%%program rows:
+'remove-atom'(_, Term, _) :- may_take_definition(Term, F), var(F), !, instantiation_error(F).
 
-%%Remove a function atom. The rows it takes from this space decide the answer,
-%%as for any atom, and a row takes a clause with it only if it was compiled:
-%%(= $h 1) is data, and an imported copy in a second space has no clause.
-%%Definition changes share one lock, so a row's clause is never read while a
-%%recompilation replaces it:
-'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body], atom(F), !,
+%%Remove atoms that may include definitions. The rows taken from this space
+%%decide the answer, as for any atom, and a row takes a clause with it only if
+%%it was compiled: (= $h 1) is data, and an imported copy in a second space has
+%%no clause. An unbound operator, as in ($op (f 1) 2), takes data and
+%%definitions alike. Definition changes share one lock, so a row's clause is
+%%never read while a recompilation replaces it:
+'remove-atom'(Space, Term, Removed) :- may_take_definition(Term, F), atom(F), !,
+                                       Term = [_, [_|Args], Body],
                                        with_mutex(petta_dependency_graph,
                                                   remove_function_atom(Space, Term, F, Args, Body, Removed)).
 
@@ -192,6 +195,12 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 'remove-atom'(Space, Term, Removed) :-
     typed_space_runtime_value_ok(Space, Term),
     remove_sexp(Space, Term, Removed).
+
+%A pattern may take a definition when it has three elements, its operator is =
+%or unbound, and its head is unbound or an expression. F is the function name,
+%unbound if unknown. The test binds nothing in the pattern:
+may_take_definition(Term, F) :- is_list(Term), Term = [Eq, Head, _], ( var(Eq) -> true ; Eq == (=) ),
+                                ( var(Head) -> true ; Head = [F|_] ).
 
 remove_function_atom(Space, Term, F, Args, Body, Removed) :-
     Term = [Rel|RowArgs], Row =.. [Space, Rel|RowArgs],
@@ -237,11 +246,11 @@ forget_function_rows(F, Args, Body, ClauseRefs) :-
 
 %Updates whose row the translator proved against the space's declared schema
 %(typed_space_update_goal/4). A function atom keeps its own clause.
-'add-atom-proven'(Space, Term, true) :- ( var(Term) -> true ; Term = [=,_,_] ), !,
+'add-atom-proven'(Space, Term, true) :- ( var(Term) -> true ; is_list(Term), Term = [Eq,_,_], Eq == (=) ), !,
                                         'add-atom'(Space, Term, true).
 'add-atom-proven'(Space, Term, true) :- add_sexp(Space, Term).
 
-'remove-atom-proven'(Space, Term, Removed) :- Term = [=,_,_], !,
+'remove-atom-proven'(Space, Term, Removed) :- may_take_definition(Term, _), !,
                                               'remove-atom'(Space, Term, Removed).
 'remove-atom-proven'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).
 
