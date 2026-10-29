@@ -765,18 +765,17 @@ cache_call(Fun, AVs, Out) :-
 
 % Public API
 
+% Memoizing a function compiles its clauses again where they are, and rebuilds
+% its callers, so that calls go through the memo table. Its equations stay in
+% their spaces and their order, duplicates included, and existing memo entries
+% remain valid.
 'memoize'(Fun, true) :-
     ( atom(Fun), fun(Fun)
     -> true
     ; throw(error(domain_error(function_symbol, Fun), 'memoize!/2'))
     ),
-    findall(Term,
-        (translated_from(_, Term), Term = [=, [Fun|_], _]),
-        RawTerms),
-    sort(RawTerms, Terms),
-    forall(member(Term, Terms), 'remove-atom'('&self', Term, _)),
     enable_memoization(Fun),
-    forall(member(Term, Terms), 'add-atom'('&self', Term, _)).
+    recompile_memoized_function(Fun).
 
 'memoize'(Fun, CallArity, true) :-
     ( atom(Fun), fun(Fun)
@@ -787,13 +786,22 @@ cache_call(Fun, AVs, Out) :-
     -> true
     ; throw(error(domain_error(nonneg_integer, CallArity), 'memoize!/3'))
     ),
-    findall(Term,
-        ( translated_from(_, Term),
-          Term = [=, [Fun|Args], _],
-          length(Args, CallArity)
-        ),
-        RawTerms),
-    sort(RawTerms, Terms),
-    forall(member(Term, Terms), 'remove-atom'('&self', Term, _)),
     enable_memoization(Fun, CallArity),
-    forall(member(Term, Terms), 'add-atom'('&self', Term, _)).
+    recompile_memoized_function(Fun).
+
+recompile_memoized_function(Fun) :-
+    with_mutex(petta_dependency_graph,
+               ( memoized_function_events(Fun, Events),
+                 ( Events == [] -> true ; notify_mutations(Events) ) )).
+
+memoized_function_events(Fun, Events) :-
+    findall(clause_changed(Fun/N, runtime),
+            ( ( compiled_deps(Ref, Fun/SourceN, _, _),
+                clause(Head, _, Ref),
+                functor(Head, Fun, A),
+                CallN is A - 1,
+                ( N = SourceN ; N = CallN ) )
+            ; ( member(D, [clause_set(Fun/N), effect(Fun/N), decl(Fun/N), output_cert(_, Fun/N), late_call(Fun/N)]),
+                compiled_dep_edge(D, _, _) ) ),
+            Events0),
+    sort(Events0, Events).
