@@ -241,9 +241,11 @@ swap_staged_function(F, Us, Staged) :-
     invalidate_specializations(F).
 
 assert_staged_clauses([]).
-assert_staged_clauses([staged(_, Term, OriginFile, Clause, Dependencies)|Ss]) :-
+assert_staged_clauses([staged(OldRef, Term, OriginFile, Clause, Dependencies)|Ss]) :-
     assertz(Clause, NewRef),
     assertz(translated_from(NewRef, Term)),
+    % The row that owned the old clause owns its replacement.
+    ( retract(compiled_row(RowRef, OldRef)) -> assertz(compiled_row(RowRef, NewRef)) ; true ),
     Term = [=, [G|SourceArgs], _],
     length(SourceArgs, N),
     record_compiled_dependencies(NewRef, G/N, OriginFile, Dependencies),

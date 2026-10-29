@@ -65,7 +65,8 @@ specialize_call(HV, AVs, Out, Goal) :- %1. Retrieve a copy of all meta-clauses s
                                                  Input = [=, [_|SpecArgs], _],
                                                  length(SpecArgs, SpecN),
                                                  record_compiled_dependencies(Ref, SpecName/SpecN, Dependencies),
-                                                 add_sexp('&self', Input),
+                                                 add_sexp('&self', Input, RowRef),
+                                                 assertz(compiled_row(RowRef, Ref)),
                                                  format(atom(Label), "metta specialization (~w)", [SpecName]),
                                                  maybe_print_compiled_clause(Label, Input, Clause) ))
                                                %4.6 Ok specialized, but if we did not succeed ensure the specialization is retracted:
@@ -115,7 +116,8 @@ specializable_arg(Arg) :- nonvar(Arg),
                           ( fun(Arg) ; Arg = partial(_, _) ).
 
 %Forget function symbol:
-forget_symbol(Name) :- retractall('&self'(=, [Name|_], _)),
+forget_symbol(Name) :- forall(clause('&self'(=, [Name|_], _), true, RowRef),
+                              ( retractall(compiled_row(RowRef, _)), ignore(erase(RowRef)) )),
                        retractall('&self'(:, Name, _)),
                        forget_symbol_types(Name),
                        findall(Ref, ( current_predicate(Name/A), functor(H, Name, A), clause(H, _, Ref) ), Refs),

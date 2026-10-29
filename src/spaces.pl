@@ -1,18 +1,23 @@
 :- dynamic space_primitive/2.
 
+%compiled_row(RowRef, ClauseRef): the stored row owns this exact compiled clause.
+%A definition imported into a second space is stored there without one.
+:- dynamic compiled_row/2.
+
 %Since both normal add-attom call and function additions needs to add the S-expression:
 %Nonempty expressions keep their indexed rows; other atoms are stored separately, so
 %no expression value is reserved as a marker. An unbound atom raises an instantiation error.
-add_sexp(Space, TermIn) :-
+add_sexp(Space, TermIn) :- add_sexp(Space, TermIn, _).
+add_sexp(Space, TermIn, Ref) :-
     ( var(TermIn) ->
         instantiation_error(TermIn)
     ; is_list(TermIn), TermIn = [Rel|Args] ->
         Term =.. [Space, Rel | Args],
-        assertz(Term),
+        assertz(Term, Ref),
         maybe_cache_type_decl(Space, [Rel|Args])
     ;
         must_be(atom, Space),
-        assertz(space_primitive(Space, TermIn))
+        assertz(space_primitive(Space, TermIn), Ref)
     ).
 
 %Same but for removal, of every row the atom unifies with. Removed says whether
@@ -85,6 +90,7 @@ runtime_add_function_tx(Space, Term, FAtom, W, Snapshot) :-
     assertz(Clause, ClauseRef),
     nb_setarg(2, Refs, ClauseRef),
     assertz(translated_from(ClauseRef, Term)),
+    assertz(compiled_row(RawRef, ClauseRef)),
     record_compiled_dependencies(ClauseRef, FAtom/N, Dependencies),
     notify_mutation(clause_changed(FAtom/N, runtime)),
     metta_on_function_changed(FAtom),
@@ -111,7 +117,8 @@ cleanup_runtime_function_add(F,
          ignore(catch(erase(ClauseRef), _, fail))
     ; true ),
     ( RawRef \== none
-      -> ignore(catch(erase(RawRef), _, fail))
+      -> retractall(compiled_row(RawRef, _)),
+         ignore(catch(erase(RawRef), _, fail))
     ; true ),
     restore_runtime_function_clauses(F, CompiledClauses),
     restore_recompile_state(F, Recompile),
@@ -131,14 +138,15 @@ cleanup_runtime_function_add(F,
     unified_checker_cache:unified_summary_cache_store_many(CacheEntries).
 
 snapshot_runtime_function_clauses(F, Clauses) :-
-    findall(runtime_compiled_clause(Source, Head, Body, Origin, Dependencies),
+    findall(runtime_compiled_clause(Source, Head, Body, Origin, Dependencies, Owner),
             ( translated_from(Ref, Source),
               runtime_source_key(Source, F/_),
               clause(Head, Body, Ref),
               compiled_dependency_origin(Ref, Origin),
               ( compiled_deps(Ref, _, _, StoredDependencies)
                 -> Dependencies = StoredDependencies
-              ; Dependencies = [] ) ),
+              ; Dependencies = [] ),
+              ( compiled_row(RowRef, Ref) -> Owner = RowRef ; Owner = none ) ),
             Clauses).
 
 restore_runtime_function_clauses(F, Clauses) :-
@@ -149,15 +157,17 @@ restore_runtime_function_clauses(F, Clauses) :-
     forall(member(Ref, CurrentRefs),
            ( forget_compiled_dependencies(Ref),
              retractall(translated_from(Ref, _)),
+             retractall(compiled_row(_, Ref)),
              ignore(catch(erase(Ref), _, fail)) )),
     restore_runtime_compiled_clauses(Clauses).
 
 restore_runtime_compiled_clauses([]).
 restore_runtime_compiled_clauses(
-        [runtime_compiled_clause(Source, Head, Body, Origin, Dependencies)
+        [runtime_compiled_clause(Source, Head, Body, Origin, Dependencies, Owner)
          |Clauses]) :-
     assertz((Head :- Body), Ref),
     assertz(translated_from(Ref, Source)),
+    ( Owner == none -> true ; assertz(compiled_row(Owner, Ref)) ),
     runtime_source_key(Source, Key),
     record_compiled_dependencies(Ref, Key, Origin, Dependencies),
     restore_runtime_compiled_clauses(Clauses).
@@ -168,19 +178,35 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 %%A removal with an unknown function name must not erase program rows:
 'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
 
-%%Remove a function atom. Its rows decide the answer, as for any atom: every
-%%clause has its row, and a row may have none, as (= $h 1) is data. When no
-%%row went, nothing else changes:
+%%Remove a function atom. The rows it takes from this space decide the answer,
+%%as for any atom, and a row takes a clause with it only if it was compiled:
+%%(= $h 1) is data, and an imported copy in a second space has no clause.
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body], atom(F), !,
-                                       remove_sexp(Space, Term, Removed),
-                                       ( Removed == true -> forget_function_atom(F, Args, Body, Term) ; true ).
+                                       Term = [Rel|RowArgs], Row =.. [Space, Rel|RowArgs],
+                                       findall(ClauseRef-Compiled, take_row(Row, ClauseRef, Compiled), Taken),
+                                       ( Taken == [] -> Removed = false
+                                       ; Removed = true,
+                                         findall(R, member(R-true, Taken), ClauseRefs),
+                                         ( ClauseRefs == [] -> true
+                                         ; forget_function_rows(F, Args, Body, ClauseRefs) ) ).
 
 %Remove all same atoms, reporting whether there were any, as for a function atom:
 'remove-atom'(Space, Term, Removed) :-
     typed_space_runtime_value_ok(Space, Term),
     remove_sexp(Space, Term, Removed).
 
-forget_function_atom(F, Args, Body, Term) :-
+%Take a row that Row unifies with, and the clause it owns if it was compiled.
+%Erasing the row is the claim: of several threads, one takes it.
+take_row(Row, ClauseRef, Compiled) :- clause(Row, true, RowRef), erase(RowRef),
+                                      ( retract(compiled_row(RowRef, ClauseRef)) -> Compiled = true
+                                                                                 ; Compiled = false ).
+
+%Erase the clause a removed row owned, with its record and dependencies:
+erase_owned_clause(ClauseRef) :- retractall(translated_from(ClauseRef, _)),
+                                 forget_compiled_dependencies(ClauseRef),
+                                 erase(ClauseRef).
+
+forget_function_rows(F, Args, Body, ClauseRefs) :-
     ( atom(F), nb_current(F, Prev) -> true ; Prev = [] ),
     (   select(Meta, Prev, Rest),
         Meta = fun_meta(Args0, Body0, _),
@@ -188,11 +214,7 @@ forget_function_atom(F, Args, Body, Term) :-
         Body0 =@= Body
         -> ( Rest == [] -> nb_delete(F)
                          ; nb_setval(F, Rest) ) ; true ),
-    findall(Ref, translated_from(Ref, Term), Refs),
-    forall(member(Ref, Refs),
-           ( forget_compiled_dependencies(Ref),
-             erase(Ref) )),
-    retractall(translated_from(_, Term)),
+    maplist(erase_owned_clause, ClauseRefs),
     metta_on_function_changed(F),
     invalidate_specializations(F),
     length(Args, N),

@@ -164,12 +164,13 @@ process_form(_, _, parsed(runnable, FormStr, Line, Term), Result) :- with_form_l
                                                                                            format("\e[33m^^^^^^^^^^^^^^^^^^^^^^^~n\e[0m") ),
                                                                   call_goals(Goals).
 process_form(Space, space_only, parsed(function, _, _, Term), []) :- !, add_sexp(Space, Term).
-process_form(Space, compile_functions, parsed(function, FormStr, Line, Term), []) :- add_sexp(Space, Term),
+process_form(Space, compile_functions, parsed(function, FormStr, Line, Term), []) :- add_sexp(Space, Term, RowRef),
                                                                   with_form_location(Line, FormStr,
                                                                                      translate_clause(Term, Clause, true,
                                                                                                       Dependencies)),
                                                                   assertz(Clause, Ref),
                                                                   assertz(translated_from(Ref, Term)),
+                                                                  assertz(compiled_row(RowRef, Ref)),
                                                                   Term = [=, [Fn|Args], _],
                                                                   length(Args, N),
                                                                   record_compiled_dependencies(Ref, Fn/N, Dependencies),
