@@ -90,6 +90,51 @@ take_row(Row, ClauseRef, Compiled) :- clause(Row, true, RowRef), erase(RowRef),
 %Erase the clause a removed row owned, and its record:
 erase_owned_clause(ClauseRef) :- retractall(translated_from(ClauseRef, _)), erase(ClauseRef).
 
+%Compile F's clauses again where they are, each from the row that owns it, so
+%that a change in how calls compile (memoization) reaches them while the rows,
+%their order and their spaces stay as they were. A bound CallArity limits this
+%to the clauses taking that many arguments. Existing memo entries stay valid:
+recompile_function_rows(F, CallArity) :-
+    with_mutex(petta_definitions,
+               ( compiled_function_predicate_arities(F, CallArity, Arities),
+                 forall(member(A, Arities), recompile_function_arity(F, A)) )).
+
+compiled_function_predicate_arities(F, CallArity, Arities) :-
+    findall(A,
+            ( compiled_row(_, Ref),
+              clause(Head, _, Ref),
+              functor(Head, F, A),
+              ( var(CallArity) -> true ; A =:= CallArity + 1 ),
+              predicate_property(Head, dynamic),
+              \+ predicate_property(Head, imported_from(_)) ),
+            Arities0),
+    sort(Arities0, Arities).
+
+%Translate first, then swap the clauses in one transaction, so that callers in
+%other threads see the old clauses or the new ones:
+recompile_function_arity(F, A) :-
+    functor(Head, F, A),
+    findall(Ref, clause(Head, _, Ref), Refs),
+    maplist(recompiled_clause, Refs, Items),
+    transaction(( forall(member(Ref, Refs), ( retractall(translated_from(Ref, _)), erase(Ref) )),
+                  maplist(assert_recompiled_clause, Items) )).
+
+%A clause a row owns is translated again from that row as stored; any other
+%clause is kept as it is:
+recompiled_clause(Ref, row(RowRef, Term, Clause)) :- compiled_row(RowRef, Ref),
+                                                    clause(Row, true, RowRef), !,
+                                                    Row =.. [_|Term],
+                                                    once(translate_clause(Term, Clause)).
+recompiled_clause(Ref, kept((Head :- Body), Source)) :- clause(Head, Body, Ref),
+                                                      ( translated_from(Ref, Source) -> true ; Source = none ).
+
+assert_recompiled_clause(row(RowRef, Term, Clause)) :- assertz(Clause, Ref),
+                                                      assertz(translated_from(Ref, Term)),
+                                                      retractall(compiled_row(RowRef, _)),
+                                                      assertz(compiled_row(RowRef, Ref)).
+assert_recompiled_clause(kept(Clause, Source)) :- assertz(Clause, Ref),
+                                                 ( Source == none -> true ; assertz(translated_from(Ref, Source)) ).
+
 % A space is a predicate per row arity, created by the first add-atom. Reading
 % a space before it is written calls an undefined predicate, and every such
 % call would search the autoloader before failing. The first call declares the

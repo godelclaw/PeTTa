@@ -765,18 +765,16 @@ cache_call(Fun, AVs, Out) :-
 
 % Public API
 
+% Memoizing a function compiles its clauses again where they are, so that their
+% calls go through the memo table. Its equations stay in their spaces and their
+% order, duplicates included.
 'memoize'(Fun, true) :-
     ( atom(Fun), fun(Fun)
     -> true
     ; throw(error(domain_error(function_symbol, Fun), 'memoize!/2'))
     ),
-    findall(Term,
-        (translated_from(_, Term), Term = [=, [Fun|_], _]),
-        RawTerms),
-    sort(RawTerms, Terms),
-    forall(member(Term, Terms), 'remove-atom'('&self', Term, _)),
     enable_memoization(Fun),
-    forall(member(Term, Terms), 'add-atom'('&self', Term, _)).
+    recompile_function_rows(Fun, _).
 
 'memoize'(Fun, CallArity, true) :-
     ( atom(Fun), fun(Fun)
@@ -787,13 +785,5 @@ cache_call(Fun, AVs, Out) :-
     -> true
     ; throw(error(domain_error(nonneg_integer, CallArity), 'memoize!/3'))
     ),
-    findall(Term,
-        ( translated_from(_, Term),
-          Term = [=, [Fun|Args], _],
-          length(Args, CallArity)
-        ),
-        RawTerms),
-    sort(RawTerms, Terms),
-    forall(member(Term, Terms), 'remove-atom'('&self', Term, _)),
     enable_memoization(Fun, CallArity),
-    forall(member(Term, Terms), 'add-atom'('&self', Term, _)).
+    recompile_function_rows(Fun, CallArity).
