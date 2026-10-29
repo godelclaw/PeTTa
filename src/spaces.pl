@@ -1,10 +1,15 @@
 :- dynamic space_primitive/2.
 
+%compiled_row(RowRef, ClauseRef): this stored row owns this exact compiled clause.
+%A definition imported into a second space is stored there without one.
+:- dynamic compiled_row/2.
+
 %Nonempty expressions keep their indexed rows; other atoms are stored separately.
 %An unbound atom still raises an instantiation error:
-add_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
-                        ; Atom = [Rel|Args] -> Term =.. [Space, Rel | Args], assertz(Term)
-                        ; must_be(atom, Space), assertz(space_primitive(Space, Atom)) ).
+add_sexp(Space, Atom) :- add_sexp(Space, Atom, _).
+add_sexp(Space, Atom, Ref) :- ( var(Atom) -> instantiation_error(Atom)
+                             ; Atom = [Rel|Args] -> Term =.. [Space, Rel | Args], assertz(Term, Ref)
+                             ; must_be(atom, Space), assertz(space_primitive(Space, Atom), Ref) ).
 
 %Same but for removal, of every row the atom unifies with. Removed says whether
 %there was one: the first retract decides it atomically, so of several threads
@@ -18,7 +23,7 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
 
 %Add a function atom:
 'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
-                                 add_sexp(Space, Term),
+                                 add_sexp(Space, Term, RowRef),
                                  register_fun(FAtom),
                                  length(W, N),
                                  Arity is N + 1,
@@ -26,6 +31,7 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
                                  once(translate_clause(Term, Clause)),
                                  assertz(Clause, Ref),
                                  assertz(translated_from(Ref, Term)),
+                                 assertz(compiled_row(RowRef, Ref)),
                                  metta_on_function_changed(FAtom),
                                  maybe_print_compiled_clause("added function", Term, Clause).
 
@@ -35,23 +41,33 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
 %%A removal with an unknown function name must not erase program rows:
 'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
 
-%%Remove a function atom. Its rows decide the answer, as for any atom: every
-%%clause has its row, and a row may have none, as (= $h 1) is data. When no
-%%row went, nothing else changes:
+%%Remove a function atom. The rows it takes from this space decide the answer,
+%%as for any atom, and a row takes a clause with it only if it was compiled:
+%%(= $h 1) is data, and an imported copy in a second space has no clause.
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|_],_], atom(F), !,
-                                       remove_sexp(Space, Term, Removed),
-                                       ( Removed == true
-                                         -> findall(Ref, translated_from(Ref, Term), Refs),
-                                            forall(member(Ref, Refs), erase(Ref)),
-                                            retractall(translated_from(_, Term)),
-                                            metta_on_function_changed(F),
-                                            ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
-                                              -> retractall(fun(F)), metta_on_function_removed(F)
-                                              ; true )
-                                         ; true ).
+                                       Term = [Rel|Args], Row =.. [Space, Rel|Args],
+                                       findall(ClauseRef-Compiled, take_row(Row, ClauseRef, Compiled), Taken),
+                                       ( Taken == [] -> Removed = false
+                                       ; Removed = true,
+                                         findall(R, member(R-true, Taken), ClauseRefs),
+                                         ( ClauseRefs == [] -> true
+                                         ; maplist(erase_owned_clause, ClauseRefs),
+                                           metta_on_function_changed(F),
+                                           ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
+                                             -> retractall(fun(F)), metta_on_function_removed(F)
+                                             ; true ) ) ).
 
 %Remove all same atoms, reporting whether there were any, as for a function atom:
 'remove-atom'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).
+
+%Take a row that Row unifies with, and the clause it owns if it was compiled.
+%Erasing the row is the claim: of several threads, one takes it.
+take_row(Row, ClauseRef, Compiled) :- clause(Row, true, RowRef), erase(RowRef),
+                                      ( retract(compiled_row(RowRef, ClauseRef)) -> Compiled = true
+                                                                                 ; Compiled = false ).
+
+%Erase the clause a removed row owned, and its record:
+erase_owned_clause(ClauseRef) :- retractall(translated_from(ClauseRef, _)), erase(ClauseRef).
 
 % A space is a predicate per row arity, created by the first add-atom. Reading
 % a space before it is written calls an undefined predicate, and every such

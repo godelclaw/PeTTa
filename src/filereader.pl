@@ -91,11 +91,12 @@ process_form(_, _, parsed(runnable, FormStr, Term), Result) :- translate_expr([c
                                                                                      format("\e[33m^^^^^^^^^^^^^^^^^^^^^^^~n\e[0m") ),
                                                             call_goals(Goals).
 process_form(Space, space_only, parsed(function, _, Term), []) :- add_sexp(Space, Term).
-process_form(Space, compile_functions, parsed(function, FormStr, Term), []) :- add_sexp(Space, Term),
+process_form(Space, compile_functions, parsed(function, FormStr, Term), []) :- add_sexp(Space, Term, RowRef),
                                                             Term = [=, [F|_], _],
                                                             translate_clause(Term, Clause),
                                                             assertz(Clause, Ref),
                                                             assertz(translated_from(Ref, Term)),
+                                                            assertz(compiled_row(RowRef, Ref)),
                                                             metta_on_function_changed(F),
                                                             ( silent(true) -> true ; format("\e[33m--> metta function -->~n\e[36m~w~n\e[33m--> prolog clause -->~n\e[32m", [FormStr]),
                                                                                      clause(Head, Body, Ref),
