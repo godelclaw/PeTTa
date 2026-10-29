@@ -260,17 +260,28 @@ forget_function_rows(F, ClauseRefs) :-
     invalidate_specializations(F),
     ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
       -> retractall(fun(F)), metta_on_function_removed(F),
-         forget_function_metadata(F)
+         forget_function_metadata(F),
+         uncallable_events(F, Uncallable)
     ; member(change(_, Arity), Changes), functor(Head, F, Arity), \+ clause(Head, _, _)
-      -> recompile_function_clauses(F)
-    ; true ),
+      -> recompile_function_clauses(F), Uncallable = []
+    ; Uncallable = [] ),
     % Callable classification is part of the
     % unified call contract.  Drop the last
     % fun/1 marker before rebuilding callers
     % so they see data syntax, not a stale
     % unknown function call.
     findall(clause_changed(Key, runtime), member(change(Key, _), Changes), Events0),
-    list_to_set(Events0, Events), notify_mutations(Events).
+    append(Events0, Uncallable, Events1),
+    list_to_set(Events1, Events), notify_mutations(Events).
+
+% Once a function has no clause left, callers of every arity must see data
+% syntax, not only callers of the arity just removed.
+uncallable_events(F, [callable_changed(F)|Events]) :-
+    findall(clause_changed(F/N, runtime),
+            ( member(D, [clause_set(F/N), effect(F/N), decl(F/N), output_cert(_, F/N), late_call(F/N)]),
+              compiled_dep_edge(D, _, _) ),
+            Events0),
+    list_to_set(Events0, Events).
 
 % Dependency keys and physical arities come from the owned clauses, never the
 % removal pattern, whose head may have an open tail or match several arities.
