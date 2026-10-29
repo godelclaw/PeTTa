@@ -6,10 +6,15 @@ add_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
                         ; Atom = [Rel|Args] -> Term =.. [Space, Rel | Args], assertz(Term)
                         ; must_be(atom, Space), assertz(space_primitive(Space, Atom)) ).
 
-%Same but for removal:
-remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
-                           ; Atom = [Rel|Args] -> Term =.. [Space, Rel | Args], retractall(Term)
-                           ; must_be(atom, Space), retractall(space_primitive(Space, Atom)) ).
+%Same but for removal, of every row the atom unifies with. Removed says whether
+%there was one: the first retract decides it atomically, so of several threads
+%removing the same row exactly one is told true. Pattern variables stay unbound:
+remove_sexp(Space, Atom) :- remove_sexp(Space, Atom, _).
+remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
+                                    ; Atom = [Rel|Args] -> Term =.. [Space, Rel | Args]
+                                    ; must_be(atom, Space), Term = space_primitive(Space, Atom) ),
+                                    ( \+ \+ retract(Term) -> retractall(Term), Removed = true
+                                                          ; Removed = false ).
 
 %Add a function atom:
 'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
@@ -30,20 +35,23 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
 %%A removal with an unknown function name must not erase program rows:
 'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
 
-%%Remove a function atom:
+%%Remove a function atom. Its rows decide the answer, as for any atom: every
+%%clause has its row, and a row may have none, as (= $h 1) is data. When no
+%%row went, nothing else changes:
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|_],_], atom(F), !,
-                                       remove_sexp(Space, Term),
-                                       findall(Ref, translated_from(Ref, Term), Refs),
-                                       forall(member(Ref, Refs), erase(Ref)),
-                                       retractall(translated_from(_, Term)),
-                                       metta_on_function_changed(F),
-                                       ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
-                                         -> retractall(fun(F)), metta_on_function_removed(F)
-                                         ; true ),
-                                       ( Refs = [] -> Removed = false ; Removed = true ).
+                                       remove_sexp(Space, Term, Removed),
+                                       ( Removed == true
+                                         -> findall(Ref, translated_from(Ref, Term), Refs),
+                                            forall(member(Ref, Refs), erase(Ref)),
+                                            retractall(translated_from(_, Term)),
+                                            metta_on_function_changed(F),
+                                            ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
+                                              -> retractall(fun(F)), metta_on_function_removed(F)
+                                              ; true )
+                                         ; true ).
 
-%Remove all same atoms:
-'remove-atom'(Space, Term, true) :- remove_sexp(Space, Term).
+%Remove all same atoms, reporting whether there were any, as for a function atom:
+'remove-atom'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).
 
 % A space is a predicate per row arity, created by the first add-atom. Reading
 % a space before it is written calls an undefined predicate, and every such
