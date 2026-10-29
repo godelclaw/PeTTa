@@ -2,6 +2,7 @@
 
 swipl -q -s tests/test_parser_swrite.pl -g run_tests -t halt || exit 1
 swipl -q -s tests/test_loader_display.pl -g "run_tests(loader_display)" -t halt || exit 1
+swipl -q -s tests/test_source_support.pl -g "run_tests(source_support)" -t halt || exit 1
 
 run_test() {
     f="$1"

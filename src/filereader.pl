@@ -34,7 +34,7 @@ load_metta_file_contents(CanonPath, Results, Space) :-
     setup_call_cleanup(
         push_working_dir(CanonPath),
         ( read_file_to_string(CanonPath, S, []),
-          process_metta_string(S, Results, Space, Mode) ),
+          process_metta_string(S, Results, Space, file(Mode, CanonPath)) ),
         pop_working_dir
     ).
 
@@ -54,11 +54,12 @@ rethrow_metta_file_error(_, Error) :- throw(Error).
 process_metta_string(S, Results) :- process_metta_string(S, Results, '&self').
 process_metta_string(S, Results, Space) :-
     process_metta_string(S, Results, Space, compile_functions).
-process_metta_string(S, Results, Space, Mode) :- string_codes(S, Cs),
+process_metta_string(S, Results, Space, LoadMode) :- string_codes(S, Cs),
                                                  strip(Cs, 0, Codes),
                                                  phrase(top_forms(Forms, 1), Codes),
                                                  maplist(parse_form, Forms, ParsedForms),
-                                                 maplist(process_form(Space, Mode), ParsedForms, ResultsList), !,
+                                                 source_processing_mode(LoadMode, ParsedForms, Mode, File),
+                                                 process_parsed_forms(Space, Mode, File, ParsedForms, 1, ResultsList), !,
                                                  append(ResultsList, Results).
 
 register_function_signature(F, Arity) :- warn_if_used_as_symbol(F),
@@ -90,17 +91,17 @@ process_form(_, _, parsed(runnable, FormStr, Term), Result) :- translate_expr([c
                                                                                      forall(member(G, Goals), portray_clause((:- G))),
                                                                                      format("\e[33m^^^^^^^^^^^^^^^^^^^^^^^~n\e[0m") ),
                                                             call_goals(Goals).
-process_form(Space, space_only, parsed(function, _, Term), []) :- add_sexp(Space, Term).
-process_form(Space, compile_functions, parsed(function, FormStr, Term), []) :- Term = [=, [F|_], _],
+process_form(Space, Mode, parsed(function, FormStr, Term), []) :- Term = [=, [F|_], _],
                                                             %Under the lock definition removals take, as in add-atom:
                                                             with_mutex(petta_definitions,
-                                                                       ( add_sexp(Space, Term, RowRef),
-                                                                         translate_clause(Term, Clause),
+                                                                       ( load_function_row(Space, Mode, Term, RowRef, Compile),
+                                                                         ( Compile == true -> translate_clause(Term, Clause),
                                                                          assertz(Clause, Ref),
                                                                          assertz(translated_from(Ref, Term)),
                                                                          assertz(compiled_row(RowRef, Ref)),
-                                                                         capture_clause_display(Ref, Display) )),
-                                                            notify_function_changed(F),
+                                                                         capture_clause_display(Ref, Display)
+                                                                         ; Display = silent ) )),
+                                                            ( Compile == true -> notify_function_changed(F) ; true ),
                                                             ( Display == silent -> true ; Display = clause(Show),
                                                                                      format("\e[33m--> metta function -->~n\e[36m~w~n\e[33m--> prolog clause -->~n\e[32m", [FormStr]),
                                                                                      portray_clause(current_output, Show),
@@ -150,3 +151,40 @@ strip([0'"|R], 1, [0'"|O]) :- !, strip(R, 0, O).
 strip([0'\n|R], In, [0'\n|O]) :- !, strip(R, In, O).
 strip([0';|R], 0, Out) :- !, (append(_, [0'\n|Rest], R) -> strip(Rest, 0, Out) ; Out = []).
 strip([C|R], In, [C|O]) :- strip(R, In, O).
+
+function_form_text(parsed(function, Text, _), Text).
+
+% A file form has one compiled definition, shared by its imported copies.
+% The exact source text distinguishes a changed form at the same file position.
+source_processing_mode(file(Initial, File), Forms, Mode, File) :- !,
+    ( Initial == space_only, file_definition_missing(File, Forms)
+      -> Mode = compile_functions ; Mode = Initial ).
+source_processing_mode(Mode, _, Mode, none).
+file_definition_missing(File, Forms) :-
+    nth1(Index, Forms, Form), function_form_text(Form, Text),
+    \+ live_source_clause(source(File, Index, Text), _), !.
+process_parsed_forms(_, _, _, [], _, []).
+process_parsed_forms(Space, Mode, File, [Form|Forms], Index, [Result|Results]) :-
+    ( File == none -> FormMode = Mode
+    ; function_form_text(Form, Text) -> FormMode = source(File, Index, Text)
+    ; FormMode = Mode ),
+    process_form(Space, FormMode, Form, Result), Next is Index + 1,
+    process_parsed_forms(Space, Mode, File, Forms, Next, Results).
+
+% This runs under the definition lock. A re-import links its row to existing
+% code; a missing definition is compiled again, without duplicating survivors.
+load_function_row(Space, Mode, Term, RowRef, Compile) :-
+    Term = [=, [F|Args], _], length(Args, N), Arity is N + 1,
+    register_function_signature(F, Arity),
+    add_sexp(Space, Term, RowRef),
+    ( Mode = source(File, Index, Text)
+      -> Key = source(File, Index, Text),
+         ( live_source_clause(Key, Ref)
+           -> assertz(compiled_row(RowRef, Ref)), Compile = false
+         ; Compile = true ),
+         assertz(source_row(Key, RowRef))
+    ; Mode == space_only -> Compile = false
+    ; Compile = true ).
+live_source_clause(Key, Ref) :-
+    source_row(Key, RowRef), clause(_, true, RowRef),
+    compiled_row(RowRef, Ref), clause(_, _, Ref), !.

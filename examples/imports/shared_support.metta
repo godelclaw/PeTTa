@@ -1,0 +1,6 @@
+(: support-typed (-> Number Number))
+(= (support-k 1) 3)
+(= (support-dup) a)
+(= (support-dup) b)
+(= (support-dup) a)
+(= (support-typed $x) (+ $x 1))

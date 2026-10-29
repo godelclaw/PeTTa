@@ -1,8 +1,9 @@
 :- dynamic space_primitive/2.
 
-%compiled_row(RowRef, ClauseRef): this stored row owns this exact compiled clause.
-%A definition imported into a second space is stored there without one.
+%compiled_row(RowRef, ClauseRef): this stored row supports the compiled clause.
+%Imported copies share a clause; explicit duplicate equations have distinct clauses.
 :- dynamic compiled_row/2.
+:- dynamic source_row/2.
 
 %Nonempty expressions keep their indexed rows; other atoms are stored separately.
 %An unbound atom still raises an instantiation error:
@@ -23,7 +24,7 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
                                                           ; Removed = false ).
 
 %Add a function atom. Definitions are added and removed under one lock, so a
-%removal never takes a row before the clause it owns is recorded:
+%removal never takes a row before its clause support is recorded:
 'add-atom'(Space, Term, true) :- Term = [Eq,[FAtom|W],_], Eq == (=), atom(FAtom), !,
                                  with_mutex(petta_definitions, add_function_atom(Space, Term, FAtom, W)).
 
@@ -47,10 +48,9 @@ add_function_atom(Space, Term, FAtom, W) :- add_sexp(Space, Term, RowRef),
 'remove-atom'(_, Term, _) :- may_take_definition(Term, F), var(F), !, instantiation_error(F).
 
 %%Remove an atom that may be a definition. The row taken from this space
-%%decides the answer, as for any atom, and takes a clause with it only if it was
-%%compiled: (= $h 1) is data, and an imported copy in a second space has no
-%%clause. An unbound operator, as in ($op (f 1) 2), may take data or a
-%%definition:
+%%decides the answer, as for any atom. Its clause goes only when no supporting
+%%row remains: (= $h 1) is data, while imported copies share a clause.
+%%An unbound operator, as in ($op (f 1) 2), may take data or a definition:
 'remove-atom'(Space, Term, Removed) :- may_take_definition(Term, F), atom(F), !,
                                        with_mutex(petta_definitions, remove_function_atom(Space, Term, F, Removed)).
 
@@ -84,15 +84,17 @@ user_dynamic_head(F, A, Head) :- current_predicate(F/A),
                                  \+ predicate_property(Head, imported_from(_)).
 
 %Take the first row that Row unifies with and that no other thread took first,
-%and the clause it owns if it was compiled. Erasing the row is the claim.
+%and whether its clause lost its last support. Erasing the row is the claim.
 take_row(Row, ClauseRef, Compiled) :- clause(Row, true, RowRef), erase(RowRef),
-                                      ( retract(compiled_row(RowRef, ClauseRef)) -> Compiled = true
-                                                                                 ; Compiled = false ).
+                                      retractall(source_row(_, RowRef)),
+                                      ( retract(compiled_row(RowRef, ClauseRef))
+                                        -> ( compiled_row(_, ClauseRef) -> Compiled = false ; Compiled = true )
+                                      ; Compiled = false ).
 
-%Erase the clause a removed row owned, and its record:
+%Erase the clause whose last supporting row was removed, and its record:
 erase_owned_clause(ClauseRef) :- retractall(translated_from(ClauseRef, _)), erase(ClauseRef).
 
-%Compile F's clauses again where they are, each from the row that owns it, so
+%Compile F's clauses again where they are, each from a supporting row, so
 %that a change in how calls compile (memoization) reaches them while the rows,
 %their order and their spaces stay as they were. A bound CallArity limits this
 %to the clauses taking that many arguments. Existing memo entries stay valid:
@@ -121,19 +123,20 @@ recompile_function_arity(F, A) :-
     transaction(( forall(member(Ref, Refs), ( retractall(translated_from(Ref, _)), erase(Ref) )),
                   maplist(assert_recompiled_clause, Items) )).
 
-%A clause a row owns is translated again from that row as stored; any other
-%clause is kept as it is:
-recompiled_clause(Ref, row(RowRef, Term, Clause)) :- compiled_row(RowRef, Ref),
-                                                    clause(Row, true, RowRef), !,
+%A supported clause is translated again from a stored row, retaining all its
+%support links; any other clause is kept as it is:
+recompiled_clause(Ref, row(Rows, Term, Clause)) :- findall(R, compiled_row(R, Ref), Rows),
+                                                    Rows = [RowRef|_], clause(Row, true, RowRef), !,
                                                     Row =.. [_|Term],
                                                     once(translate_clause(Term, Clause)).
 recompiled_clause(Ref, kept((Head :- Body), Source)) :- clause(Head, Body, Ref),
                                                       ( translated_from(Ref, Source) -> true ; Source = none ).
 
-assert_recompiled_clause(row(RowRef, Term, Clause)) :- assertz(Clause, Ref),
+assert_recompiled_clause(row(Rows, Term, Clause)) :- assertz(Clause, Ref),
                                                       assertz(translated_from(Ref, Term)),
-                                                      retractall(compiled_row(RowRef, _)),
-                                                      assertz(compiled_row(RowRef, Ref)).
+                                                      forall(member(RowRef, Rows),
+                                                             ( retractall(compiled_row(RowRef, _)),
+                                                               assertz(compiled_row(RowRef, Ref)) )).
 assert_recompiled_clause(kept(Clause, Source)) :- assertz(Clause, Ref),
                                                  ( Source == none -> true ; assertz(translated_from(Ref, Source)) ).
 
