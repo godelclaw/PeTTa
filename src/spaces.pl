@@ -28,8 +28,9 @@ remove_sexp(Space, TermIn, Removed) :-
         instantiation_error(TermIn)
     ; is_list(TermIn), TermIn = [Rel|Args] ->
         Term =.. [Space, Rel | Args],
-        retract_reporting(Term, Removed),
-        maybe_uncache_type_decl(Space, [Rel|Args])
+        ( may_take_declaration(Space, TermIn)
+          -> with_mutex(petta_dependency_graph, remove_declaration_rows(Term, Removed))
+          ; retract_reporting(Term, Removed) )
     ;
         must_be(atom, Space),
         retract_reporting(space_primitive(Space, TermIn), Removed)
@@ -49,6 +50,7 @@ retract_reporting(Term, Removed) :-
 %lock that definition changes share (notify_mutations/1), so removals never see
 %the interval between staging and cleanup; other observers still can.
 'add-atom'(Space, Term, true) :- Term = [Eq,[FAtom|W],_], Eq == (=), atom(FAtom), !,
+                                 typed_space_runtime_value_ok(Space, Term),
                                  with_mutex(petta_dependency_graph,
                                             add_function_atom(Space, Term, FAtom, W)).
 
@@ -188,9 +190,9 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 %%definitions alike. Definition changes share one lock, so a row's clause is
 %%never read while a recompilation replaces it:
 'remove-atom'(Space, Term, Removed) :- may_take_definition(Term, F), atom(F), !,
-                                       Term = [_, [_|Args], _],
+                                       typed_space_runtime_value_ok(Space, Term),
                                        with_mutex(petta_dependency_graph,
-                                                  remove_function_atom(Space, Term, F, Args, Removed)).
+                                                  remove_function_atom(Space, Term, F, Removed)).
 
 %Remove all same atoms, reporting whether there were any, as for a function atom:
 'remove-atom'(Space, Term, Removed) :-
@@ -203,14 +205,16 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 may_take_definition(Term, F) :- is_list(Term), Term = [Eq, Head, _], ( var(Eq) -> true ; Eq == (=) ),
                                 ( var(Head) -> true ; Head = [F|_] ).
 
-remove_function_atom(Space, Term, F, Args, Removed) :-
+remove_function_atom(Space, Term, F, Removed) :-
     Term = [Rel|RowArgs], Row =.. [Space, Rel|RowArgs],
-    findall(ClauseRef-Compiled, take_row(Row, ClauseRef, Compiled), Taken),
+    findall(removed(ClauseRef, Compiled, Decl), take_row(Row, ClauseRef, Compiled, Decl), Taken),
     ( Taken == [] -> Removed = false
     ; Removed = true,
-      findall(R, member(R-true, Taken), ClauseRefs),
+      findall(R, member(removed(R, true, _), Taken), ClauseRefs),
       ( ClauseRefs == [] -> true
-      ; forget_function_rows(F, Args, ClauseRefs) ) ).
+      ; forget_function_rows(F, ClauseRefs) ),
+      findall(D, member(removed(_, _, D), Taken), Declarations),
+      uncache_removed_declarations(Declarations) ).
 
 forget_function_metadata(F) :- catch(nb_delete(F), _, true),
                                retractall(inferred_fn_type(F, _, _)),
@@ -218,9 +222,27 @@ forget_function_metadata(F) :- catch(nb_delete(F), _, true),
 
 %Take a row that Row unifies with, and the clause it owns if it was compiled.
 %Erasing the row is the claim: of several threads, one takes it.
-take_row(Row, ClauseRef, Compiled) :- clause(Row, true, RowRef), erase(RowRef),
+take_row(Row, ClauseRef, Compiled, Declaration) :- clause(Row, true, RowRef),
+                                      row_declaration_removal(Row, RowRef, Declaration),
+                                      erase(RowRef),
                                       ( retract(compiled_row(RowRef, ClauseRef)) -> Compiled = true
                                                                                  ; Compiled = false ).
+
+% Only actual declaration rows affect the cache. Snapshot their store identity
+% and normalized keys before removing aliases changes the type environment.
+may_take_declaration(Space, Term) :- Space == '&self', Term = [Tag, _, _],
+                                     ( var(Tag) -> true ; Tag == (:) ).
+row_declaration_removal(Row, Ref, Declaration) :-
+    ( functor(Row, '&self', 3), arg(1, Row, Rel), ( var(Rel) ; Rel == (:) ),
+      clause(Stored, true, Ref), Stored =.. [_, Tag, Name, Type], Tag == (:), atom(Name)
+      -> snapshot_type_decl_removal(Name, Type, Declaration)
+    ; Declaration = none ).
+remove_declaration_rows(Row, Removed) :-
+    findall(Decl, take_row(Row, _, _, Decl), Taken),
+    ( Taken == [] -> Removed = false
+    ; Removed = true, uncache_removed_declarations(Taken) ).
+uncache_removed_declarations(Declarations) :-
+    with_decl_notifications_batched(maplist(uncache_type_decl_snapshot, Declarations)).
 
 %Erase the clause a removed row owned, with its record and dependencies:
 erase_owned_clause(ClauseRef) :- retractall(translated_from(ClauseRef, _)),
@@ -231,17 +253,15 @@ erase_owned_clause(ClauseRef) :- retractall(translated_from(ClauseRef, _)),
 %determinism provisos - follows the clauses that remain. It goes with the last
 %clause; when the removed arity has none left but another arity has, it is
 %rebuilt from those, and otherwise notify_mutation/1 rebuilds the function.
-forget_function_rows(F, Args, ClauseRefs) :-
+forget_function_rows(F, ClauseRefs) :-
+    maplist(clause_removal_change(F), ClauseRefs, Changes),
     maplist(erase_owned_clause, ClauseRefs),
     metta_on_function_changed(F),
     invalidate_specializations(F),
-    length(Args, N),
-    Arity is N + 1,
-    functor(Head, F, Arity),
     ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
       -> retractall(fun(F)), metta_on_function_removed(F),
          forget_function_metadata(F)
-    ; \+ clause(Head, _, _)
+    ; member(change(_, Arity), Changes), functor(Head, F, Arity), \+ clause(Head, _, _)
       -> recompile_function_clauses(F)
     ; true ),
     % Callable classification is part of the
@@ -249,7 +269,14 @@ forget_function_rows(F, Args, ClauseRefs) :-
     % fun/1 marker before rebuilding callers
     % so they see data syntax, not a stale
     % unknown function call.
-    notify_mutation(clause_changed(F/N, runtime)).
+    findall(clause_changed(Key, runtime), member(change(Key, _), Changes), Events0),
+    list_to_set(Events0, Events), notify_mutations(Events).
+
+% Dependency keys and physical arities come from the owned clauses, never the
+% removal pattern, whose head may have an open tail or match several arities.
+clause_removal_change(F, Ref, change(Key, Arity)) :-
+    clause(Head, _, Ref), functor(Head, F, Arity),
+    ( compiled_deps(Ref, Key, _, _) -> true ; N is Arity - 1, Key = F/N ).
 
 %Updates whose row the translator proved against the space's declared schema
 %(typed_space_update_goal/4). A function atom keeps its own clause.

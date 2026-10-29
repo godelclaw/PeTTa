@@ -574,7 +574,23 @@ maybe_uncache_type_decl(Space, Term) :-
 %whose normalization depended on a removed alias, recompute explicit-arrow
 %metadata from the declarations that remain in &self, and recompile affected
 %clauses so cuts and guards match the surviving declarations.
-uncache_type_decl(Name, Type) :- kind_decl(Type, Keyword, Value), !,
+uncache_type_decl(Name, Type) :-
+    snapshot_type_decl_removal(Name, Type, Snapshot),
+    uncache_type_decl_snapshot(Snapshot).
+
+% Match insertion's classification on the raw type. An alias can expand to an
+% arrow or kind-shaped tuple while its declaration still belongs to the value
+% store. Normalize only the keys, retaining that store identity for later use.
+snapshot_type_decl_removal(Name, Type, kind(Name, Keyword, Value)) :-
+    kind_decl(Type, Keyword, Value), !.
+snapshot_type_decl_removal(Name, Type, function(Name, N, scheme(ATN, OTN), Effect)) :-
+    nonvar(Type), fn_type_shape(Type, ATs, OT, Det), !,
+    maplist(normalize_type, ATs, ATN), normalize_type(OT, OTN),
+    canonical_effect_model(Det, ATN, Effect), length(ATN, N).
+snapshot_type_decl_removal(Name, Type, value(Name, TN)) :- normalize_type(Type, TN).
+
+uncache_type_decl_snapshot(none).
+uncache_type_decl_snapshot(kind(Name, Keyword, Value)) :-
     ( kind_decl_clause(Name, Keyword, Value, Ref)
       -> ( Keyword == 'Alias'
            -> alias_removal_rebuild(Name, Ref)
@@ -583,27 +599,20 @@ uncache_type_decl(Name, Type) :- kind_decl(Type, Keyword, Value), !,
            retractall(nonfn_decl_origin(Name, _)),
            decl_notify(declaration_changed(Kind, Name, removed)) )
     ; true ).
-uncache_type_decl(Name, Type) :-
-    ( nonvar(Type), fn_type_shape(Type, ATs, OT, Det)
-      -> maplist(normalize_type, ATs, ATN),
-         normalize_type(OT, OTN),
-         canonical_effect_model(Det, ATN, Effect),
-         length(ATN, N),
-         recorded_constructor_dependency_types(ConstructorCandidates),
-         include(symbol_enters_constructor_set(Name), ConstructorCandidates,
-                 RemovedCtorTypes),
-         ( remove_fn_decl_record(Name, N, scheme(ATN, OTN), Effect, _)
-           -> decl_notify(declaration_changed(Name/N, removed)),
-              forall(member(T, RemovedCtorTypes),
-                     decl_notify(constructor_set_changed(T, Name)))
-         ; true )
-    ; normalize_type(Type, TN),
-      ( clause(declared_value_type(Name, T2), true, Ref), T2 =@= TN
-        -> erase(Ref),
-           retractall(nonfn_decl_origin(Name, _)),
-           decl_notify(declaration_changed(value, Name, removed)),
-           notify_removed_value_constructor(Name, TN)
-      ; true ) ).
+uncache_type_decl_snapshot(function(Name, N, Scheme, Effect)) :-
+    recorded_constructor_dependency_types(ConstructorCandidates),
+    include(symbol_enters_constructor_set(Name), ConstructorCandidates, RemovedCtorTypes),
+    ( remove_fn_decl_record(Name, N, Scheme, Effect, _)
+      -> decl_notify(declaration_changed(Name/N, removed)),
+         forall(member(T, RemovedCtorTypes), decl_notify(constructor_set_changed(T, Name)))
+    ; true ).
+uncache_type_decl_snapshot(value(Name, TN)) :-
+    ( clause(declared_value_type(Name, T2), true, Ref), T2 =@= TN
+      -> erase(Ref),
+         retractall(nonfn_decl_origin(Name, _)),
+         decl_notify(declaration_changed(value, Name, removed)),
+         notify_removed_value_constructor(Name, TN)
+    ; true ).
 
 notify_removed_value_constructor(Name, T) :-
     ( atom(T), \+ primitive_type(T), \+ wildcard_type(T)

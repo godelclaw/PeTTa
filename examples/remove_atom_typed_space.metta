@@ -1,0 +1,20 @@
+; Dynamic-space calls must validate definitions and potential-definition patterns.
+(: &job-schema (SpaceOf (job-row Number)))
+(= (schema-put $s) (add-atom $s (= (schema-sneaky 1) 2)))
+(= (schema-drop $s) (remove-atom $s ($op (schema-sneaky 1) "not-a-job")))
+!(test (let (Error $e $kind) (catch (schema-put &job-schema)) $kind) typecheck)
+!(test (collapse (match &job-schema $row $row)) ())
+!(test (== (schema-sneaky 1) 2) False)
+!(test (let (Error $e $kind) (catch (schema-drop &job-schema)) $kind) typecheck)
+!(test (add-atom &job-schema (job-row 3)) True)
+!(test (remove-atom &job-schema (job-row 3)) True)
+!(test (remove-atom &job-schema (job-row 3)) False)
+
+; A schema that admits definition rows still permits their normal lifecycle.
+(: &definition-schema (SpaceOf (Atom Expression Number)))
+(= (schema-put-valid $s) (add-atom $s (= (schema-valid 1) 2)))
+(= (schema-drop-valid $s) (remove-atom $s (= (schema-valid 1) 2)))
+!(test (schema-put-valid &definition-schema) True)
+!(test (schema-valid 1) 2)
+!(test (schema-drop-valid &definition-schema) True)
+!(test (== (schema-valid 1) 2) False)
