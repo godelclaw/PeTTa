@@ -15,18 +15,26 @@ add_sexp(Space, TermIn) :-
         assertz(space_primitive(Space, TermIn))
     ).
 
-%Same but for removal:
-remove_sexp(Space, TermIn) :-
+%Same but for removal, of every row the atom unifies with. Removed says whether
+%there was one:
+remove_sexp(Space, TermIn) :- remove_sexp(Space, TermIn, _).
+remove_sexp(Space, TermIn, Removed) :-
     ( var(TermIn) ->
         instantiation_error(TermIn)
     ; is_list(TermIn), TermIn = [Rel|Args] ->
         Term =.. [Space, Rel | Args],
-        retractall(Term),
+        retract_reporting(Term, Removed),
         maybe_uncache_type_decl(Space, [Rel|Args])
     ;
         must_be(atom, Space),
-        retractall(space_primitive(Space, TermIn))
+        retract_reporting(space_primitive(Space, TermIn), Removed)
     ).
+
+%The first retract decides the report atomically, so of several threads removing
+%the same row exactly one is told true. Pattern variables stay unbound.
+retract_reporting(Term, Removed) :-
+    ( \+ \+ retract(Term) -> retractall(Term), Removed = true
+                          ; Removed = false ).
 
 %%An unbound atom would match every row, so it is not added:
 'add-atom'(_, Term, _) :- var(Term), !, instantiation_error(Term).
@@ -160,39 +168,43 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 %%A removal with an unknown function name must not erase program rows:
 'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
 
-%%Remove a function atom:
+%%Remove a function atom. Its rows decide the answer, as for any atom: every
+%%clause has its row, and a row may have none, as (= $h 1) is data. When no
+%%row went, nothing else changes:
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body], atom(F), !,
-                                       remove_sexp(Space, Term),
-                                       ( atom(F), nb_current(F, Prev) -> true ; Prev = [] ),
-                                       (   select(Meta, Prev, Rest),
-                                           Meta = fun_meta(Args0, Body0, _),
-                                           Args0 =@= Args,
-                                           Body0 =@= Body
-                                           -> ( Rest == [] -> nb_delete(F)
-                                                            ; nb_setval(F, Rest) ) ; true ),
-                                       findall(Ref, translated_from(Ref, Term), Refs),
-                                       forall(member(Ref, Refs),
-                                              ( forget_compiled_dependencies(Ref),
-                                                erase(Ref) )),
-                                       retractall(translated_from(_, Term)),
-                                       metta_on_function_changed(F),
-                                       invalidate_specializations(F),
-                                       length(Args, N),
-                                       ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
-                                         -> retractall(fun(F)), metta_on_function_removed(F)
-                                         ; true ),
-                                       % Callable classification is part of the
-                                       % unified call contract.  Drop the last
-                                       % fun/1 marker before rebuilding callers
-                                       % so they see data syntax, not a stale
-                                       % unknown function call.
-                                       notify_mutation(clause_changed(F/N, runtime)),
-                                       ( Refs = [] -> Removed = false ; Removed = true ).
+                                       remove_sexp(Space, Term, Removed),
+                                       ( Removed == true -> forget_function_atom(F, Args, Body, Term) ; true ).
 
-%Remove all same atoms:
-'remove-atom'(Space, Term, true) :-
+%Remove all same atoms, reporting whether there were any, as for a function atom:
+'remove-atom'(Space, Term, Removed) :-
     typed_space_runtime_value_ok(Space, Term),
-    remove_sexp(Space, Term).
+    remove_sexp(Space, Term, Removed).
+
+forget_function_atom(F, Args, Body, Term) :-
+    ( atom(F), nb_current(F, Prev) -> true ; Prev = [] ),
+    (   select(Meta, Prev, Rest),
+        Meta = fun_meta(Args0, Body0, _),
+        Args0 =@= Args,
+        Body0 =@= Body
+        -> ( Rest == [] -> nb_delete(F)
+                         ; nb_setval(F, Rest) ) ; true ),
+    findall(Ref, translated_from(Ref, Term), Refs),
+    forall(member(Ref, Refs),
+           ( forget_compiled_dependencies(Ref),
+             erase(Ref) )),
+    retractall(translated_from(_, Term)),
+    metta_on_function_changed(F),
+    invalidate_specializations(F),
+    length(Args, N),
+    ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
+      -> retractall(fun(F)), metta_on_function_removed(F)
+      ; true ),
+    % Callable classification is part of the
+    % unified call contract.  Drop the last
+    % fun/1 marker before rebuilding callers
+    % so they see data syntax, not a stale
+    % unknown function call.
+    notify_mutation(clause_changed(F/N, runtime)).
 
 %Updates whose row the translator proved against the space's declared schema
 %(typed_space_update_goal/4). A function atom keeps its own clause.
@@ -202,7 +214,7 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 
 'remove-atom-proven'(Space, Term, Removed) :- Term = [=,_,_], !,
                                               'remove-atom'(Space, Term, Removed).
-'remove-atom-proven'(Space, Term, true) :- remove_sexp(Space, Term).
+'remove-atom-proven'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).
 
 %Typed spaces accept open payloads and removal patterns.  At the operation
 %boundary reject only a value that has become a definite contradiction; this
