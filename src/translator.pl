@@ -231,13 +231,15 @@ stage_function_clauses(F, [Ref-Term|Us],
     translate_clause(Term, Clause, ConstrainArgs, Dependencies),
     stage_function_clauses(F, Us, Ss).
 
+%The swap is one transaction, so callers in other threads see the old clauses
+%or the new ones, never none:
 swap_staged_function(F, Us, Staged) :-
-    forall(member(Ref-_, Us),
-           ( clause(_, _, Ref) -> erase(Ref) ; true )),
-    forall(member(Ref-_, Us),
-           ( retractall(translated_from(Ref, _)),
-             forget_compiled_dependencies(Ref) )),
-    assert_staged_clauses(Staged),
+    transaction(( forall(member(Ref-_, Us),
+                         ( clause(_, _, Ref) -> erase(Ref) ; true )),
+                  forall(member(Ref-_, Us),
+                         ( retractall(translated_from(Ref, _)),
+                           forget_compiled_dependencies(Ref) )),
+                  assert_staged_clauses(Staged) )),
     invalidate_specializations(F).
 
 assert_staged_clauses([]).

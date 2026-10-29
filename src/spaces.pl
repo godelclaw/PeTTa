@@ -155,12 +155,13 @@ restore_runtime_function_clauses(F, Clauses) :-
             ( translated_from(Ref, Source),
               runtime_source_key(Source, F/_) ),
             CurrentRefs),
-    forall(member(Ref, CurrentRefs),
-           ( forget_compiled_dependencies(Ref),
-             retractall(translated_from(Ref, _)),
-             retractall(compiled_row(_, Ref)),
-             ignore(catch(erase(Ref), _, fail)) )),
-    restore_runtime_compiled_clauses(Clauses).
+    % One transaction, so callers see the current clauses or the restored ones.
+    transaction(( forall(member(Ref, CurrentRefs),
+                         ( forget_compiled_dependencies(Ref),
+                           retractall(translated_from(Ref, _)),
+                           retractall(compiled_row(_, Ref)),
+                           ignore(catch(erase(Ref), _, fail)) )),
+                  restore_runtime_compiled_clauses(Clauses) )).
 
 restore_runtime_compiled_clauses([]).
 restore_runtime_compiled_clauses(
