@@ -21,22 +21,25 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
                                     ( \+ \+ retract(Term) -> retractall(Term), Removed = true
                                                           ; Removed = false ).
 
-%Add a function atom:
+%Add a function atom. Definitions are added and removed under one lock, so a
+%removal never takes a row before the clause it owns is recorded:
 'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
-                                 add_sexp(Space, Term, RowRef),
-                                 register_fun(FAtom),
-                                 length(W, N),
-                                 Arity is N + 1,
-                                 assertz(arity(FAtom,Arity)),
-                                 once(translate_clause(Term, Clause)),
-                                 assertz(Clause, Ref),
-                                 assertz(translated_from(Ref, Term)),
-                                 assertz(compiled_row(RowRef, Ref)),
-                                 metta_on_function_changed(FAtom),
-                                 maybe_print_compiled_clause("added function", Term, Clause).
+                                 with_mutex(petta_definitions, add_function_atom(Space, Term, FAtom, W)).
 
 %Add an atom to the space:
 'add-atom'(Space, Term, true) :- add_sexp(Space, Term).
+
+add_function_atom(Space, Term, FAtom, W) :- add_sexp(Space, Term, RowRef),
+                                            register_fun(FAtom),
+                                            length(W, N),
+                                            Arity is N + 1,
+                                            assertz(arity(FAtom,Arity)),
+                                            once(translate_clause(Term, Clause)),
+                                            assertz(Clause, Ref),
+                                            assertz(translated_from(Ref, Term)),
+                                            assertz(compiled_row(RowRef, Ref)),
+                                            metta_on_function_changed(FAtom),
+                                            maybe_print_compiled_clause("added function", Term, Clause).
 
 %%A removal with an unknown function name must not erase program rows:
 'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
@@ -45,20 +48,22 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
 %%as for any atom, and a row takes a clause with it only if it was compiled:
 %%(= $h 1) is data, and an imported copy in a second space has no clause.
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|_],_], atom(F), !,
-                                       Term = [Rel|Args], Row =.. [Space, Rel|Args],
-                                       findall(ClauseRef-Compiled, take_row(Row, ClauseRef, Compiled), Taken),
-                                       ( Taken == [] -> Removed = false
-                                       ; Removed = true,
-                                         findall(R, member(R-true, Taken), ClauseRefs),
-                                         ( ClauseRefs == [] -> true
-                                         ; maplist(erase_owned_clause, ClauseRefs),
-                                           metta_on_function_changed(F),
-                                           ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
-                                             -> retractall(fun(F)), metta_on_function_removed(F)
-                                             ; true ) ) ).
+                                       with_mutex(petta_definitions, remove_function_atom(Space, Term, F, Removed)).
 
 %Remove all same atoms, reporting whether there were any, as for a function atom:
 'remove-atom'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).
+
+remove_function_atom(Space, Term, F, Removed) :- Term = [Rel|Args], Row =.. [Space, Rel|Args],
+                                                 findall(ClauseRef-Compiled, take_row(Row, ClauseRef, Compiled), Taken),
+                                                 ( Taken == [] -> Removed = false
+                                                 ; Removed = true,
+                                                   findall(R, member(R-true, Taken), ClauseRefs),
+                                                   ( ClauseRefs == [] -> true
+                                                   ; maplist(erase_owned_clause, ClauseRefs),
+                                                     metta_on_function_changed(F),
+                                                     ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
+                                                       -> retractall(fun(F)), metta_on_function_removed(F)
+                                                       ; true ) ) ).
 
 %Take a row that Row unifies with, and the clause it owns if it was compiled.
 %Erasing the row is the claim: of several threads, one takes it.
