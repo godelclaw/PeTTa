@@ -45,28 +45,29 @@ retract_reporting(Term, Removed) :-
 'add-atom'(_, Term, _) :- var(Term), !, instantiation_error(Term).
 
 %Add a function atom. On failure or exception it rolls back its staged raw
-%atom, registration, metadata and compiled-dependency state; concurrent
-%observers can still see the interval between staging and cleanup.
+%atom, registration, metadata and compiled-dependency state. It runs under the
+%lock that definition changes share (notify_mutations/1), so removals never see
+%the interval between staging and cleanup; other observers still can.
 'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
-                                 length(W, SourceArity),
-                                 snapshot_runtime_function_add(
-                                     FAtom, SourceArity, Snapshot),
-                                 catch(
-                                     ( runtime_add_function_tx(
-                                           Space, Term, FAtom, W, Snapshot)
-                                       -> true
-                                       ; cleanup_runtime_function_add(
-                                           FAtom, Snapshot),
-                                       fail ),
-                                     Error,
-                                     ( cleanup_runtime_function_add(
-                                           FAtom, Snapshot),
-                                       throw(Error) )).
+                                 with_mutex(petta_dependency_graph,
+                                            add_function_atom(Space, Term, FAtom, W)).
 
 %Add an atom to the space:
 'add-atom'(Space, Term, true) :-
     typed_space_runtime_value_ok(Space, Term),
     add_sexp(Space, Term).
+
+add_function_atom(Space, Term, FAtom, W) :-
+    length(W, SourceArity),
+    snapshot_runtime_function_add(FAtom, SourceArity, Snapshot),
+    catch(
+        ( runtime_add_function_tx(Space, Term, FAtom, W, Snapshot)
+          -> true
+          ; cleanup_runtime_function_add(FAtom, Snapshot),
+            fail ),
+        Error,
+        ( cleanup_runtime_function_add(FAtom, Snapshot),
+          throw(Error) )).
 
 runtime_add_function_tx(Space, Term, FAtom, W, Snapshot) :-
     Term = [=, [FAtom|W], TermBody],
@@ -181,19 +182,25 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 %%Remove a function atom. The rows it takes from this space decide the answer,
 %%as for any atom, and a row takes a clause with it only if it was compiled:
 %%(= $h 1) is data, and an imported copy in a second space has no clause.
+%%Definition changes share one lock, so a row's clause is never read while a
+%%recompilation replaces it:
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|Args],Body], atom(F), !,
-                                       Term = [Rel|RowArgs], Row =.. [Space, Rel|RowArgs],
-                                       findall(ClauseRef-Compiled, take_row(Row, ClauseRef, Compiled), Taken),
-                                       ( Taken == [] -> Removed = false
-                                       ; Removed = true,
-                                         findall(R, member(R-true, Taken), ClauseRefs),
-                                         ( ClauseRefs == [] -> true
-                                         ; forget_function_rows(F, Args, Body, ClauseRefs) ) ).
+                                       with_mutex(petta_dependency_graph,
+                                                  remove_function_atom(Space, Term, F, Args, Body, Removed)).
 
 %Remove all same atoms, reporting whether there were any, as for a function atom:
 'remove-atom'(Space, Term, Removed) :-
     typed_space_runtime_value_ok(Space, Term),
     remove_sexp(Space, Term, Removed).
+
+remove_function_atom(Space, Term, F, Args, Body, Removed) :-
+    Term = [Rel|RowArgs], Row =.. [Space, Rel|RowArgs],
+    findall(ClauseRef-Compiled, take_row(Row, ClauseRef, Compiled), Taken),
+    ( Taken == [] -> Removed = false
+    ; Removed = true,
+      findall(R, member(R-true, Taken), ClauseRefs),
+      ( ClauseRefs == [] -> true
+      ; forget_function_rows(F, Args, Body, ClauseRefs) ) ).
 
 %Take a row that Row unifies with, and the clause it owns if it was compiled.
 %Erasing the row is the claim: of several threads, one takes it.

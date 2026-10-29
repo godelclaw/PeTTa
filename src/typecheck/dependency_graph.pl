@@ -78,7 +78,12 @@ forget_validation_dependencies(Key) :-
 notify_mutation(Event) :-
     notify_mutations([Event]).
 
+% Threads that change definitions at once rebuild one shared graph, so their
+% cascades run one at a time. The mutex is recursive, so a cascade may nest.
 notify_mutations(Events) :-
+    with_mutex(petta_dependency_graph, notify_mutations_(Events)).
+
+notify_mutations_(Events) :-
     mutation_seed_functions_all(Events, Seed),
     State0 = graph_state(Seed, []),
     maplist(invalidate_mutation_event, Events),

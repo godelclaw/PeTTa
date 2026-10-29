@@ -164,19 +164,21 @@ process_form(_, _, parsed(runnable, FormStr, Line, Term), Result) :- with_form_l
                                                                                            format("\e[33m^^^^^^^^^^^^^^^^^^^^^^^~n\e[0m") ),
                                                                   call_goals(Goals).
 process_form(Space, space_only, parsed(function, _, _, Term), []) :- !, add_sexp(Space, Term).
-process_form(Space, compile_functions, parsed(function, FormStr, Line, Term), []) :- add_sexp(Space, Term, RowRef),
-                                                                  with_form_location(Line, FormStr,
-                                                                                     translate_clause(Term, Clause, true,
-                                                                                                      Dependencies)),
-                                                                  assertz(Clause, Ref),
-                                                                  assertz(translated_from(Ref, Term)),
-                                                                  assertz(compiled_row(RowRef, Ref)),
-                                                                  Term = [=, [Fn|Args], _],
+process_form(Space, compile_functions, parsed(function, FormStr, Line, Term), []) :- Term = [=, [Fn|Args], _],
                                                                   length(Args, N),
-                                                                  record_compiled_dependencies(Ref, Fn/N, Dependencies),
-                                                                  notify_mutation(
-                                                                      clause_changed(Fn/N,
-                                                                                     prevalidated)),
+                                                                  %Under the lock definition changes share, as in add-atom:
+                                                                  with_mutex(petta_dependency_graph,
+                                                                             ( add_sexp(Space, Term, RowRef),
+                                                                               with_form_location(Line, FormStr,
+                                                                                                  translate_clause(Term, Clause, true,
+                                                                                                                   Dependencies)),
+                                                                               assertz(Clause, Ref),
+                                                                               assertz(translated_from(Ref, Term)),
+                                                                               assertz(compiled_row(RowRef, Ref)),
+                                                                               record_compiled_dependencies(Ref, Fn/N, Dependencies),
+                                                                               notify_mutation(
+                                                                                   clause_changed(Fn/N,
+                                                                                                  prevalidated)) )),
                                                                   metta_on_function_changed(Fn),
                                                                   ( silent(true) -> true ; format("\e[33m--> metta function -->~n\e[36m~w~n\e[33m--> prolog clause -->~n\e[32m", [FormStr]),
                                                                                            clause(Head, Body, Ref),
