@@ -100,7 +100,7 @@ process_form(Space, compile_functions, parsed(function, FormStr, Term), []) :- T
                                                                          assertz(translated_from(Ref, Term)),
                                                                          assertz(compiled_row(RowRef, Ref)),
                                                                          capture_clause_display(Ref, Display) )),
-                                                            metta_on_function_changed(F),
+                                                            notify_function_changed(F),
                                                             ( Display == silent -> true ; Display = clause(Show),
                                                                                      format("\e[33m--> metta function -->~n\e[36m~w~n\e[33m--> prolog clause -->~n\e[32m", [FormStr]),
                                                                                      portray_clause(current_output, Show),

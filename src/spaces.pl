@@ -38,7 +38,7 @@ add_function_atom(Space, Term, FAtom, W) :- add_sexp(Space, Term, RowRef),
                                             assertz(Clause, Ref),
                                             assertz(translated_from(Ref, Term)),
                                             assertz(compiled_row(RowRef, Ref)),
-                                            metta_on_function_changed(FAtom),
+                                            notify_function_changed(FAtom),
                                             maybe_print_compiled_clause("added function", Term, Clause).
 
 %%A removal that may take definitions of an unknown function must not erase
@@ -69,10 +69,17 @@ remove_function_atom(Space, Term, F, Removed) :- Term = [Rel|Args], Row =.. [Spa
                                                    findall(R, member(R-true, Taken), ClauseRefs),
                                                    ( ClauseRefs == [] -> true
                                                    ; maplist(erase_owned_clause, ClauseRefs),
-                                                     metta_on_function_changed(F),
-                                                     ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
-                                                       -> retractall(fun(F)), metta_on_function_removed(F)
+                                                     notify_function_changed(F),
+                                                     ( \+ ( user_dynamic_head(F, _, H2), clause(H2, _, _) )
+                                                       -> retractall(fun(F)), notify_function_removed(F)
                                                        ; true ) ) ).
+
+%Only dynamic predicates defined in user hold compiled MeTTa clauses; static or
+%imported built-ins of the same name (such as plus/3 or nl/0) are skipped:
+user_dynamic_head(F, A, Head) :- current_predicate(F/A),
+                                 functor(Head, F, A),
+                                 predicate_property(Head, dynamic),
+                                 \+ predicate_property(Head, imported_from(_)).
 
 %Take a row that Row unifies with, and the clause it owns if it was compiled.
 %Erasing the row is the claim: of several threads, one takes it.
