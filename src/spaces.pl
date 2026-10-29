@@ -96,7 +96,7 @@ runtime_add_function_tx(Space, Term, FAtom, W, Snapshot) :-
     assertz(compiled_row(RawRef, ClauseRef)),
     record_compiled_dependencies(ClauseRef, FAtom/N, Dependencies),
     notify_mutation(clause_changed(FAtom/N, runtime)),
-    metta_on_function_changed(FAtom),
+    notify_function_changed(FAtom),
     invalidate_specializations(FAtom),
     maybe_print_compiled_clause("added function", Term, Clause).
 
@@ -256,15 +256,16 @@ erase_owned_clause(ClauseRef) :- retractall(translated_from(ClauseRef, _)),
 forget_function_rows(F, ClauseRefs) :-
     maplist(clause_removal_change(F), ClauseRefs, Changes),
     maplist(erase_owned_clause, ClauseRefs),
-    metta_on_function_changed(F),
+    notify_function_changed(F),
     invalidate_specializations(F),
-    ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
-      -> retractall(fun(F)), metta_on_function_removed(F),
+    ( \+ ( user_dynamic_head(F, _, H2), clause(H2, _, _) )
+      -> retractall(fun(F)), notify_function_removed(F),
          forget_function_metadata(F),
          uncallable_events(F, Uncallable)
     ; member(change(_, Arity), Changes), functor(Head, F, Arity), \+ clause(Head, _, _)
       -> recompile_function_clauses(F), Uncallable = []
     ; Uncallable = [] ),
+
     % Callable classification is part of the
     % unified call contract.  Drop the last
     % fun/1 marker before rebuilding callers
@@ -273,6 +274,13 @@ forget_function_rows(F, ClauseRefs) :-
     findall(clause_changed(Key, runtime), member(change(Key, _), Changes), Events0),
     append(Events0, Uncallable, Events1),
     list_to_set(Events1, Events), notify_mutations(Events).
+
+%Only dynamic predicates defined in user hold compiled MeTTa clauses; static or
+%imported built-ins of the same name (such as plus/3 or nl/0) are skipped:
+user_dynamic_head(F, A, Head) :- current_predicate(F/A),
+                                 functor(Head, F, A),
+                                 predicate_property(Head, dynamic),
+                                 \+ predicate_property(Head, imported_from(_)).
 
 % Once a function has no clause left, callers of every arity must see data
 % syntax, not only callers of the arity just removed.

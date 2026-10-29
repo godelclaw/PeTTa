@@ -180,7 +180,7 @@ process_form(Space, compile_functions, parsed(function, FormStr, Line, Term), []
                                                                                notify_mutation(
                                                                                    clause_changed(Fn/N,
                                                                                                   prevalidated)) )),
-                                                                  metta_on_function_changed(Fn),
+                                                                  notify_function_changed(Fn),
                                                                   ( Display == silent -> true ; Display = clause(Show),
                                                                                            format("\e[33m--> metta function -->~n\e[36m~w~n\e[33m--> prolog clause -->~n\e[32m", [FormStr]),
                                                                                            portray_clause(current_output, Show),
