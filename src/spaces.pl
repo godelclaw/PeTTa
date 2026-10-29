@@ -20,8 +20,8 @@ add_sexp(Space, TermIn, Ref) :-
         assertz(space_primitive(Space, TermIn), Ref)
     ).
 
-%Same but for removal, of every row the atom unifies with. Removed says whether
-%there was one:
+%Same but for removal, of one row the atom unifies with, even when the same
+%atom is stored twice. Removed says whether there was one:
 remove_sexp(Space, TermIn) :- remove_sexp(Space, TermIn, _).
 remove_sexp(Space, TermIn, Removed) :-
     ( var(TermIn) ->
@@ -36,10 +36,10 @@ remove_sexp(Space, TermIn, Removed) :-
         retract_reporting(space_primitive(Space, TermIn), Removed)
     ).
 
-%The first retract decides the report atomically, so of several threads removing
-%the same row exactly one is told true. Pattern variables stay unbound.
+%The retract decides the report atomically, so of several threads removing the
+%same row exactly one is told true. Pattern variables stay unbound.
 retract_reporting(Term, Removed) :-
-    ( \+ \+ retract(Term) -> retractall(Term), Removed = true
+    ( \+ \+ retract(Term) -> Removed = true
                           ; Removed = false ).
 
 %%An unbound atom would match every row, so it is not added:
@@ -183,18 +183,18 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 %%program rows:
 'remove-atom'(_, Term, _) :- may_take_definition(Term, F), var(F), !, instantiation_error(F).
 
-%%Remove atoms that may include definitions. The rows taken from this space
-%%decide the answer, as for any atom, and a row takes a clause with it only if
-%%it was compiled: (= $h 1) is data, and an imported copy in a second space has
-%%no clause. An unbound operator, as in ($op (f 1) 2), takes data and
-%%definitions alike. Definition changes share one lock, so a row's clause is
+%%Remove an atom that may be a definition. The row taken from this space
+%%decides the answer, as for any atom, and takes a clause with it only if it was
+%%compiled: (= $h 1) is data, and an imported copy in a second space has no
+%%clause. An unbound operator, as in ($op (f 1) 2), may take data or a
+%%definition. Definition changes share one lock, so a row's clause is
 %%never read while a recompilation replaces it:
 'remove-atom'(Space, Term, Removed) :- may_take_definition(Term, F), atom(F), !,
                                        typed_space_runtime_value_ok(Space, Term),
                                        with_mutex(petta_dependency_graph,
                                                   remove_function_atom(Space, Term, F, Removed)).
 
-%Remove all same atoms, reporting whether there were any, as for a function atom:
+%Remove one same atom, reporting whether there was one, as for a function atom:
 'remove-atom'(Space, Term, Removed) :-
     typed_space_runtime_value_ok(Space, Term),
     remove_sexp(Space, Term, Removed).
@@ -205,23 +205,21 @@ runtime_source_key([Eq, [F|Args], _], F/N) :-
 may_take_definition(Term, F) :- is_list(Term), Term = [Eq, Head, _], ( var(Eq) -> true ; Eq == (=) ),
                                 ( var(Head) -> true ; Head = [F|_] ).
 
+%Taking the row binds a copy of the pattern, never the pattern itself:
 remove_function_atom(Space, Term, F, Removed) :-
-    Term = [Rel|RowArgs], Row =.. [Space, Rel|RowArgs],
-    findall(removed(ClauseRef, Compiled, Decl), take_row(Row, ClauseRef, Compiled, Decl), Taken),
-    ( Taken == [] -> Removed = false
-    ; Removed = true,
-      findall(R, member(removed(R, true, _), Taken), ClauseRefs),
-      ( ClauseRefs == [] -> true
-      ; forget_function_rows(F, ClauseRefs) ),
-      findall(D, member(removed(_, _, D), Taken), Declarations),
-      uncache_removed_declarations(Declarations) ).
+    copy_term(Term, [Rel|RowArgs]), Row =.. [Space, Rel|RowArgs],
+    ( take_row(Row, ClauseRef, Compiled, Declaration)
+      -> Removed = true,
+         ( Compiled == true -> forget_function_rows(F, [ClauseRef]) ; true ),
+         uncache_removed_declarations([Declaration])
+    ; Removed = false ).
 
 forget_function_metadata(F) :- catch(nb_delete(F), _, true),
                                retractall(inferred_fn_type(F, _, _)),
                                retractall(det_bound_proviso(F, _, _, _)).
 
-%Take a row that Row unifies with, and the clause it owns if it was compiled.
-%Erasing the row is the claim: of several threads, one takes it.
+%Take the first row that Row unifies with and that no other thread took first,
+%and the clause it owns if it was compiled. Erasing the row is the claim.
 take_row(Row, ClauseRef, Compiled, Declaration) :- clause(Row, true, RowRef),
                                       row_declaration_removal(Row, RowRef, Declaration),
                                       erase(RowRef),
@@ -237,10 +235,11 @@ row_declaration_removal(Row, Ref, Declaration) :-
       clause(Stored, true, Ref), Stored =.. [_, Tag, Name, Type], Tag == (:), atom(Name)
       -> snapshot_type_decl_removal(Name, Type, Declaration)
     ; Declaration = none ).
-remove_declaration_rows(Row, Removed) :-
-    findall(Decl, take_row(Row, _, _, Decl), Taken),
-    ( Taken == [] -> Removed = false
-    ; Removed = true, uncache_removed_declarations(Taken) ).
+remove_declaration_rows(Pattern, Removed) :-
+    copy_term(Pattern, Row),
+    ( take_row(Row, _, _, Declaration)
+      -> Removed = true, uncache_removed_declarations([Declaration])
+    ; Removed = false ).
 uncache_removed_declarations(Declarations) :-
     with_decl_notifications_batched(maplist(uncache_type_decl_snapshot, Declarations)).
 

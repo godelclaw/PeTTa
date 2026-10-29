@@ -17,9 +17,12 @@
 !(test (collapse (sv md-inc 1)) ())
 !(test (collapse (sv md-inc 2)) (21))
 
-; Two equal equations removed together leave nothing behind for a later load:
+; Two equal equations, removed one copy at a time, leave nothing behind for a
+; later load:
 (= (ho_dup $f 1) ($f 10))
 (= (ho_dup $f 1) ($f 10))
+!(test (remove-atom &self (= (ho_dup $f 1) ($f 10))) True)
+!(test (collapse (ho_dup md-inc 1)) (11))
 !(test (remove-atom &self (= (ho_dup $f 1) ($f 10))) True)
 !(import! &self imports/removal_ho_dup)
 !(test (collapse (ho_dup md-inc 1)) ())

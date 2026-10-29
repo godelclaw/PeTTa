@@ -17,12 +17,16 @@
 !(test (add-atom &self (= (removed-poly $x) "constant")) True)
 !(test (removed-poly 1) "constant")
 
-; Removing aliases and their users together snapshots their old normalized types.
+; A user's declaration removed before the aliases it names, and the aliases then
+; removed one at a time, leave every cache in step with the rows that remain.
 !(add-atom &self (: RemovedAlias (Alias Number)))
 !(add-atom &self (: RemovedAlias2 (Alias RemovedAlias)))
 !(add-atom &self (: alias-user (-> RemovedAlias2 RemovedAlias2)))
+!(test (remove-atom &self (: alias-user $type)) True)
+(= (drain-declarations) (if (remove-atom &self (: $name $type)) (drain-declarations) done))
 !(test (let $removed (remove-atom &self (: $name $type))
           ($removed (is-var $name) (is-var $type))) (True True True))
+!(test (drain-declarations) done)
 !(test (add-atom &self (= (alias-user "hi") "ok")) True)
 !(test (alias-user "hi") "ok")
 !(test (remove-atom &self (: $name $type)) False)

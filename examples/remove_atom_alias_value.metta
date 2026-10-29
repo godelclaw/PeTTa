@@ -23,12 +23,15 @@
 !(test (add-atom &self (= (shared-value "hi") "ok")) True)
 !(test (shared-value "hi") "ok")
 
-; A batch keeps the store tags and normalized payloads after its aliases go.
+; Removed one at a time, aliases first, declarations keep their store tags and
+; normalized payloads after their aliases go.
 !(add-atom &self (: BatchArrowValue (Alias (-> Number Number))))
 !(add-atom &self (: batch-value BatchArrowValue))
 !(add-atom &self (: batch-function (-> Number Number)))
+(= (drain-declarations) (if (remove-atom &self (: $name $type)) (drain-declarations) done))
 !(test (let $removed (remove-atom &self (: $name $type))
           ($removed (is-var $name) (is-var $type))) (True True True))
+!(test (drain-declarations) done)
 !(test (add-atom &self (= (batch-probe) (+ batch-value 1))) True)
 !(test (add-atom &self (= (batch-function "hi") "ok")) True)
 !(test (batch-function "hi") "ok")

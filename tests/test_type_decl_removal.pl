@@ -17,7 +17,9 @@ role_type(['SpaceOf',['Number','String']]).
 role_type(T) :- var(T).
 
 % The public update API must remove the value's store entry. A separate
-% function declaration survives unless the removal pattern takes its row too.
+% function declaration survives unless the removal takes its row: a removal
+% takes one row, so (: V $t) takes V's declarations one at a time, in the order
+% they were added.
 test(alias_values_keep_store_identity,
      [forall((role_type(Type), member(Mode, [ground,operator,type])))]) :-
     user:retractall(silent(_)), user:assertz(silent(true)),
@@ -36,9 +38,13 @@ role_case(T,Mode) :-
     ;Pattern=[':',V,Unknown]),
     user:'remove-atom'('&self',Pattern,true),
     assertion(var(Op)),assertion(var(Unknown)),
-    assertion(\+ user:declared_value_type(V,_)),
-    ( Mode==type -> assertion(\+ user:fn_decl(V,_,_,_,_,_))
-    ; assertion(user:fn_decl(V,1,_,_,_,_)),
+    ( Mode==type
+      -> assertion(\+ user:fn_decl(V,_,_,_,_,_)),
+         assertion(user:declared_value_type(V,_)),
+         user:'remove-atom'('&self',Pattern,true),
+         assertion(\+ user:declared_value_type(V,_))
+    ; assertion(\+ user:declared_value_type(V,_)),
+      assertion(user:fn_decl(V,1,_,_,_,_)),
       user:'remove-atom'('&self',[':',V,['->','Number','Number']],true) ),
     user:'remove-atom'('&self',[':',A,['Alias',Type]],true).
 
