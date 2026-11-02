@@ -158,13 +158,17 @@ alpha_list_to_set(List, Set) :-
 
 alpha_list_to_set_assoc([], _, []).
 alpha_list_to_set_assoc([H|T], SeenIn, R) :-
-    copy_term_nat(H, HCopy),
-    numbervars(HCopy, 0, _),
-    term_hash(HCopy, Key),
-    ( get_assoc(Key, SeenIn, _) ->
-        alpha_list_to_set_assoc(T, SeenIn, R)
+    variant_hash(H, Key),
+    ( get_assoc(Key, SeenIn, Bucket) ->
+        ( member(B, Bucket), attribute_free_variant(H, B) ->
+            alpha_list_to_set_assoc(T, SeenIn, R)
+        ;
+            put_assoc(Key, SeenIn, [H|Bucket], SeenOut),
+            R = [H|RT],
+            alpha_list_to_set_assoc(T, SeenOut, RT)
+        )
     ;
-        put_assoc(Key, SeenIn, true, SeenOut),
+        put_assoc(Key, SeenIn, [H], SeenOut),
         R = [H|RT],
         alpha_list_to_set_assoc(T, SeenOut, RT)
     ).
@@ -287,9 +291,15 @@ py_bool_norm('@'(true), true) :- !.
 py_bool_norm('@'(false), false) :- !.
 py_bool_norm(R, R).
 'py-call'(SpecList, Result) :- 'py-call'(SpecList, Result, []).
-'py-call'([Spec|Args], Result, Opts) :- ( string(Spec) -> atom_string(A, Spec) ; A = Spec ),
-                                        must_be(atom, A),
-                                        ( sub_atom(A, 0, 1, _, '.')         % ".method"
+'py-call'([Spec|Args], Result, Opts) :-
+    ( py_is_object(Spec)
+      -> ( Args == []
+           -> compound_name_arguments(Call, '__call__', [])
+            ; Call =.. ['__call__'|Args] ),
+         py_call(Spec:Call, R0, Opts), py_bool_norm(R0, Result)
+      ; ( string(Spec) -> atom_string(A, Spec) ; A = Spec ),
+        must_be(atom, A),
+        ( sub_atom(A, 0, 1, _, '.')         % ".method"
                                           -> sub_atom(A, 1, _, 0, Fun),
                                              Args = [Obj|Rest],
                                              ( py_is_object(Obj)            % on a Python object reference
@@ -308,7 +318,7 @@ py_bool_norm(R, R).
                                               ; ( Args == []                      % bare "fun"
                                                   -> compound_name_arguments(Call0, A, [])
                                                    ; Call0 =.. [A|Args] ),
-                                                py_call(builtins:Call0, R0, Opts), py_bool_norm(R0, Result) ).
+                                                py_call(builtins:Call0, R0, Opts), py_bool_norm(R0, Result) ) ).
 
 %%% States: %%%
 'bind!'(A, ['new-state', B], C) :- 'change-state!'(A, B, C).

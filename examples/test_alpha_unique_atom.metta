@@ -57,3 +57,51 @@
 !(test (=alpha (alpha-unique-atom ((link $x human)))
                ((link $a human)))
        True)
+
+!(test (=alpha (alpha-unique-atom ($x))
+               ($a))
+       True)
+
+!(test (=alpha (alpha-unique-atom (() ()))
+               (()))
+       True)
+
+; 7 Repeated variables vs distinct variables
+!(test (=alpha (alpha-unique-atom ((f $x $x) (f $a $b) (f $y $y) (f $c $d)))
+               ((f $u $u) (f $v $w)))
+       True)
+
+; 8 Constants vs variables
+!(test (=alpha (alpha-unique-atom ((f 1) (f $x) (f 1) (f $y)))
+               ((f 1) (f $a)))
+       True)
+
+; 9 Deeply nested structures with variables
+!(test (=alpha (alpha-unique-atom ((f (g (h $x))) (f (g (h $y))) (f (g (h 1)))))
+               ((f (g (h $a))) (f (g (h 1)))))
+       True)
+
+; 10 Mixed atoms, numbers, and expressions
+!(test (=alpha (alpha-unique-atom (5 5 (5) (5) (link $x) (link $y)))
+               (5 (5) (link $a)))
+       True)
+
+; 11 Natural collision in 24-bit term_hash (reproduced data loss in old code)
+!(test (=alpha (alpha-unique-atom ((item 1253) (item 1563)))
+               ((item 1253) (item 1563)))
+       True)
+
+; 12 Natural collision in variant_hash forcing the bucket-collision path
+; (item 817 $x) and (item 5406 $y) both produce variant_hash = 14145683
+!(test (=alpha (alpha-unique-atom ((item 817 $x) (item 5406 $y) (item 817 $z)))
+               ((item 817 $a) (item 5406 $b)))
+       True)
+
+; 13 Typed/typechecked function ensuring attributed variables pass through cleanly
+(: typed-unique (-> Number Symbol (List Atom)))
+(= (typed-unique $n $s) (alpha-unique-atom ((pair $n $s) (pair $n $s) (pair 1 a))))
+!(test (=alpha (typed-unique 1 a)
+               ((pair 1 a)))
+       True)
+
+

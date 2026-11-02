@@ -14,3 +14,16 @@
 ;Verify py-call on methods of strings and numbers (see #188)
 !(test (py-call (.upper "abc")) ABC)
 !(test (py-call (.__add__ 5 3)) 8)
+
+;Verify py-call on callable objects directly
+!(let $fn (py-call (builtins.getattr (py-call (builtins.dict)) "get"))
+   (test (py-call ($fn "key" 42)) 42))
+
+!(let $add (py-call (builtins.getattr (py-call (builtins.int 10)) "__add__"))
+   (test (py-call ($add 25)) 35))
+
+!(let $upper (py-call (builtins.getattr "hello" "upper"))
+   (test (py-call ($upper)) HELLO))
+
+!(let $is_digit (py-call (builtins.getattr "12345" "isdigit"))
+   (test (py-call ($is_digit)) true))
