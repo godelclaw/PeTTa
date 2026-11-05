@@ -14,6 +14,8 @@ runtime_open_cells(T,0) :- !,T=[].
 runtime_open_cells(T,N) :- T=[N|Rest],M is N-1,runtime_open_cells(Rest,M).
 runtime_open_cost(N,Cost) :- user:rt_open_cells(L,_),statistics(inferences,Before),
     runtime_open_cells(L,N),statistics(inferences,After),Cost is After-Before.
+runtime_walk_cost(F,Extra,N,Cost) :- numlist(1,N,L),append([L|Extra],[_],Args),Goal=..[F|Args],
+    statistics(inferences,Before),once(user:call(Goal)),statistics(inferences,After),Cost is After-Before.
 runtime_input_barrier(Events,Release) :-
     thread_send_message(Events,entered),
     (thread_get_message(Release,resume,[timeout(5)])->true;throw(runtime_barrier_timeout)).
@@ -358,6 +360,31 @@ test(typed_tail_recursion_runs_in_constant_space) :-
     program("!(import_prolog_function runtime_local_used) (: rt_stack_num (-> Number Number)) (= (rt_stack_num $n) (if (== $n 0) (runtime_local_used) (rt_stack_num (- $n 1))))",_),
     maplist(user:runtime_stack_delta(rt_stack_num,[]),[50,50000],[Short,Long]),
     assertion(Short=:=Long).
+% A self-call on the tail of a checked list does not walk that tail again.
+test(self_calls_on_a_checked_list_tail_skip_its_check) :-
+    program("(: rt_walk_sum (-> (ListOf Number) Number)) (= (rt_walk_sum $l) (if (== $l ()) 0 (+ (car-atom $l) (rt_walk_sum (cdr-atom $l)))))
+      (: rt_walk_len (-> (ListOf Number) Number Number)) (= (rt_walk_len $l $n) (if (== $l ()) $n (rt_walk_len (cdr-atom $l) (+ $n 1))))
+      !(rt_walk_sum (1 2 3)) !(collapse (rt_walk_sum (1 a 3))) !(rt_walk_len (1 2 3) 0) !(collapse (rt_walk_len (1 b) 0))",R),
+    assertion(R == [6,[],3,[]]),
+    maplist(runtime_walk_cost(rt_walk_sum,[]),[1000,4000],[SumSmall,SumLarge]),assertion(SumLarge < 6*SumSmall),
+    maplist(runtime_walk_cost(rt_walk_len,[0]),[1000,4000],[LenSmall,LenLarge]),assertion(LenLarge < 6*LenSmall).
+test(a_list_tail_call_runs_in_constant_space) :-
+    program("!(import_prolog_function runtime_local_used) (: rt_stack_list (-> (ListOf Number) Number)) (= (rt_stack_list $l) (if (== $l ()) (runtime_local_used) (rt_stack_list (cdr-atom $l))))",_),
+    numlist(1,50,Short),numlist(1,50000,Long),
+    maplist(user:runtime_stack_delta(rt_stack_list,[]),[Short,Long],[S,L]),assertion(S=:=L).
+test(self_calls_on_a_list_tail_keep_their_other_checks) :-
+    program("(: rt_keep_acc (-> (ListOf Number) Number Number)) (= (rt_keep_acc $l $n) (if (== $l ()) $n (rt_keep_acc (cdr-atom $l) \"bad\")))
+      (: rt_keep_tail (-> (ListOf Number) Number)) (= (rt_keep_tail $l) (if (== $l ()) \"bad\" (rt_keep_tail (cdr-atom $l))))
+      (: rt_keep_out (-> (ListOf Number) Number)) (= (rt_keep_out $l) (if (== $l ()) \"bad\" (+ 0 (rt_keep_out (cdr-atom $l)))))
+      (: rt_keep_swap (-> (ListOf Number) (ListOf String) Number)) (= (rt_keep_swap $a $b) (if (== $a ()) 0 (rt_keep_swap (cdr-atom $b) $a)))
+      !(collapse (rt_keep_acc (1 2) 0)) !(collapse (rt_keep_tail (1 2))) !(collapse (rt_keep_out (1 2))) !(collapse (rt_keep_swap (1) (\"x\")))",R),
+    assertion(R == [[],[],[],[]]).
+test(self_calls_on_a_list_tail_observe_contract_edits) :-
+    program("(: ri_tight_list (-> (ListOf Number) Number)) (= (ri_tight_list $l) (if (== $l ()) 0 (let $_ (remove-atom &self (: ri_tight_list (-> (ListOf Number) Number))) (let $_ (add-atom &self (: ri_tight_list (-> (ListOf String) Number))) (+ 1 (ri_tight_list (cdr-atom $l)))))))
+      (: ri_same_list (-> (ListOf Number) Number)) (= (ri_same_list $l) (if (== $l ()) 7 (let $_ (remove-atom &self (: ri_same_list (-> (ListOf Number) Number))) (let $_ (add-atom &self (: ri_same_list (-> (ListOf Number) Number))) (ri_same_list (cdr-atom $l))))))
+      (: ri_nontail_list (-> (ListOf Number) Number)) (= (ri_nontail_list $l) (if (== $l ()) 7 (let $_ (remove-atom &self (: ri_nontail_list (-> (ListOf Number) Number))) (let $_ (add-atom &self (: ri_nontail_list (-> (ListOf Number) Number))) (+ 0 (ri_nontail_list (cdr-atom $l)))))))
+      !(collapse (ri_tight_list (1 2))) !(collapse (ri_same_list (1))) !(collapse (ri_nontail_list (1)))",R),
+    assertion(R == [[],[7],[7]]).
 test(boolean_tail_guards_leave_no_choicepoints) :-
     program("(: rt_stack_bool (-> Number Bool Number)) (= (rt_stack_bool $n $b) (if (== $n 0) (runtime_local_used) (rt_stack_bool (- $n 1) $b)))",_),
     maplist(user:runtime_stack_delta(rt_stack_bool,[true]),[50,50000],[Short,Long]),

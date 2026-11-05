@@ -119,6 +119,12 @@ that entry into a call to the current public predicate, including its result
 contract. This handles both widened and narrowed inputs and changed outputs.
 Input guards remain before head matching. Typed tail recursion keeps constant
 stack space; its checked entry adds one predicate call per iteration.
+A self-call, in tail position or not, whose argument is (cdr-atom $x) of an
+input $x checked against a (ListOf T) built only from the structural and
+primitive types above, at a slot of the same type, skips that slot's check: the tail of such a list is again a (ListOf T), and an open
+tail keeps the input's delayed checks. It uses its own private checked entry
+with the remaining checks, retired in the same way, so a list walk checks its
+list once.
 
 Input evidence is collected at entry, including parameters that only relate an
 input to the result. The assignment remains undecided until the result supplies
@@ -187,9 +193,9 @@ dispatcher path and space operations. In a mixed program, a variable-headed
 call with computed arguments may need a mode lookup before evaluation; a call
 whose arguments are already values still uses plain reduce. Definition loading
 performs compiler bookkeeping.
-There is no guard-erasure pass beyond tail self-calls: other recursive calls check
-their boundaries. Non-tail result checks retain stack frames, and structural
-recursion can recheck tails.
+There is no guard-erasure pass beyond tail self-calls and list-tail self-calls:
+other recursive calls check their boundaries. Non-tail result checks retain
+stack frames, and recursion over other structural parts can recheck them.
 The benchmark record must include these costs and polymorphic workloads, not
 just scalar and constructor microbenchmarks.
 

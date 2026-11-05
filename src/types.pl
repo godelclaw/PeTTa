@@ -1,6 +1,6 @@
 :- use_module(type_obligations).
 % Runtime contracts. Reflection (get-type) is deliberately independent.
-:- dynamic type_worker/3, type_wrapper/3, type_redirect/2, type_tail_entry/2, type_raw_calls/0, type_dispatch_clause/2, type_raw_function/1, type_call_entry/3.
+:- dynamic type_worker/3, type_wrapper/3, type_redirect/2, type_tail_entry/2, type_suffix_entry/3, type_raw_calls/0, type_dispatch_clause/2, type_raw_function/1, type_call_entry/3.
 
 % The declaration index is a compiled view of &self, updated in the same
 % transaction as its source rows. Wildcard rows remain ordinary space data.
@@ -295,19 +295,54 @@ type_store_clause(Term, (Head :- Body), (Stored :- Worker)) :-
     Term = [=,[F|_],_], type_update_dispatch(F), Head =.. [F|Args], length(Args, A), N is A-1,
     ( type_guarded_clause(F,N,Term,_) -> type_worker_name(F, A, W), Stored =.. [W|Args],
         (retract(type_redirect(W,Ref)) -> erase(Ref); true),
-        last(Args,Out),type_tail_calls(Body,F,A,W,Out,Worker)
+        type_tail_calls(Body,F,A,W,Args,Worker)
     ; Stored = Head, Worker = Body ).
 
 % A self-call in tail position that returns this clause's own result needs no
 % result check of its own: the entry checks that same value right after it,
 % under the same definitions. Its inputs are still checked, and the worker
 % call becomes the last call, so typed tail recursion runs in constant space.
-type_tail_calls(Body,F,A,W,Out,Worker) :- N is A-1,
+type_tail_calls(Body,F,A,W,Args,Worker) :- N is A-1,last(Args,Out),
     ( type_schemas(F,N,[Schema]),append(Inputs,[Result],Schema),
       length(Probe,N),maplist(type_inline_slot(Schema),Inputs,Probe,_),type_inline_slot(Schema,Result,_,_)
-      -> atom_concat('$tail$',W,Tail),type_tail_rewrite(Body,F,A,Tail,Out,Worker),
-         (Worker==Body->true;type_tail_target(A,W,Schema,Tail))
+      -> atom_concat('$tail$',W,Tail),type_tail_rewrite(Body,F,A,Tail,Out,Tailed),
+         (Tailed==Body->true;type_tail_target(A,W,Schema,Tail)),
+         append(Values,[_],Args),type_suffix_known(Values,Inputs,Known),
+         type_suffix_rewrite(Tailed,self(F,Tail,A,W,Schema),Known,Worker,_)
     ; Worker = Body ).
+% A self-call whose argument is the tail of an input checked against a closed
+% (ListOf T) needs no check at that slot: the tail of such a list is again a
+% (ListOf T), and an open tail keeps the input's delayed checks. Each set of
+% skipped slots has its own checked entry, retired like the tail entry.
+type_suffix_known([],[],[]).
+type_suffix_known([V|Vs],[T|Ts],Known) :-
+    (var(V),ground(T),T=['ListOf',_],type_structural(T) -> Known=[V-T|Rest];Known=Rest),
+    type_suffix_known(Vs,Ts,Rest).
+type_suffix_rewrite((G,R),S,K,(G1,R1),Out) :- !,type_suffix_rewrite(G,S,K,G1,K1),type_suffix_rewrite(R,S,K1,R1,Out).
+type_suffix_rewrite((C->T;E),S,K,(C1->T1;E1),K) :- !,
+    type_suffix_rewrite(C,S,K,C1,KC),type_suffix_rewrite(T,S,KC,T1,_),type_suffix_rewrite(E,S,K,E1,_).
+type_suffix_rewrite((C*->T;E),S,K,(C1*->T1;E1),K) :- !,
+    type_suffix_rewrite(C,S,K,C1,KC),type_suffix_rewrite(T,S,KC,T1,_),type_suffix_rewrite(E,S,K,E1,_).
+type_suffix_rewrite((L;R),S,K,(L1;R1),K) :- !,type_suffix_rewrite(L,S,K,L1,_),type_suffix_rewrite(R,S,K,R1,_).
+type_suffix_rewrite('cdr-atom'(X,E),_,K,'cdr-atom'(X,E),[E-T|K]) :- var(X),var(E),member(V-T,K),V==X,!.
+type_suffix_rewrite(G,self(F,Tail,A,W,Schema),K,Call,K) :- compound(G),compound_name_arity(G,Name,A),
+    (Name==F->Kind=call;Name==Tail->Kind=tail),G=..[_|All],append(Values,[_],All),
+    append(Inputs,[_],Schema),findall(I,(nth0(I,Values,V),var(V),nth0(I,Inputs,T),member(U-T0,K),U==V,T0==T),Found),
+    sort(Found,Mask),Mask\==[],!,type_suffix_target(A,W,Schema,Kind-Mask,Entry),Call=..[Entry|All].
+type_suffix_rewrite(G,_,K,G,K).
+type_suffix_target(_,W,_,Key,Entry) :- type_suffix_entry(W,Key,Entry),!.
+type_suffix_target(A,W,Schema,Kind-Mask,Entry) :-
+    flag(type_suffix,I,I+1),format(atom(Candidate),'$self$~d',[I]),
+    (current_predicate(Candidate/_) -> type_suffix_target(A,W,Schema,Kind-Mask,Entry)
+    ;Entry=Candidate,N is A-1,length(Values,N),append(Values,[Out],All),Head=..[Entry|All],Call=..[W|All],
+     append(Inputs,[Result],Schema),type_suffix_checks(Inputs,Values,0,Mask,Schema,Checks),
+     (Kind==tail->After=true;type_inline_slot(Schema,Result,Out,After)),
+     append(Checks,[Call,After],Goals),exclude(==(true),Goals,Needed),goals_list_to_conj(Needed,Body),
+     assertz((Head:-Body)),assertz(type_suffix_entry(W,Kind-Mask,Entry))).
+type_suffix_checks([],[],_,_,_,[]).
+type_suffix_checks([T|Ts],[V|Vs],J,Mask,Schema,[G|Gs]) :-
+    (memberchk(J,Mask)->G=true;type_inline_slot(Schema,T,V,G)),
+    K is J+1,type_suffix_checks(Ts,Vs,K,Mask,Schema,Gs).
 type_tail_rewrite((G,R),F,A,W,Out,(G,R1)) :- !,type_tail_rewrite(R,F,A,W,Out,R1).
 type_tail_rewrite((C->T;E),F,A,W,Out,(C->T1;E1)) :- !,
     type_tail_rewrite(T,F,A,W,Out,T1),type_tail_rewrite(E,F,A,W,Out,E1).
@@ -346,12 +381,11 @@ type_publish_arity(F, A, W) :-
          (retract(no_equations_clause(F,A,Empty)) -> erase(Empty); true),
          assertz((Head :- Body), Entry), assertz(type_wrapper(F,A,Entry))
     ; type_retire_worker(F,A,W) ).
-% A retired tail entry keeps only its redirect, so a running caller is checked
-% once, under the current contract.
+% A retired tail or self-call entry keeps only its redirect, so a running
+% caller is checked once, under the current contract.
 type_retire_worker(F,A,W) :- type_redirect_worker(F,A,W),
-    (retract(type_tail_entry(W,Tail)) ->
-       length(Args,A),Head=..[Tail|Args],retractall(Head),type_redirect_worker(F,A,Tail)
-    ;true).
+    forall((retract(type_tail_entry(W,Entry));retract(type_suffix_entry(W,_,Entry))),
+       (length(Args,A),Head=..[Entry|Args],retractall(Head),type_redirect_worker(F,A,Entry))).
 type_redirect_worker(F,A,W) :-
     (type_redirect(W,_) -> true
     ;length(Args,A),Head=..[W|Args],Call=..[F|Args],
@@ -481,7 +515,7 @@ type_ground_formula(T,V) :- type_member_key(T,Key),
     (type_member_code(Key,T,Name) -> Call=..[Name,V],once(Call);type_ground_check(T,V)).
 
 type_public_name(F) :-
-    ( (sub_atom(F,0,6,_,'$body$');sub_atom(F,0,8,_,'$member$');sub_atom(F,0,6,_,'$call$');sub_atom(F,0,6,_,'$tail$'))
+    ( (sub_atom(F,0,6,_,'$body$');sub_atom(F,0,8,_,'$member$');sub_atom(F,0,6,_,'$call$');sub_atom(F,0,6,_,'$tail$');sub_atom(F,0,6,_,'$self$'))
       -> domain_error(public_function_name,F);true ).
 type_plain_source(Term) :- term_attvars(Term,Vars),
     (Vars==[] -> true;type_error(plain_source,Term)).
