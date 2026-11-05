@@ -76,9 +76,11 @@ A check that only requires a value to have some type checks nothing, because
 every finite value has a canonical type: a primitive, Symbol or declared
 nominal type, a structural tuple, or an Opaque descriptor. So a parameter that
 occurs once in a signature, a wildcard slot, and a result identical to an input
-under a shared parameter impose no check and leave no watcher. Values are finite
-terms. Checks that inspect structure test acyclicity before walking a value;
-the others do not police it.
+under a shared parameter impose no check and leave no watcher. The mathematical
+laws range over finite terms. Checks that inspect structure test acyclicity
+before walking a value; unrestricted slots do not traverse or reject cyclic
+host terms. Cyclic terms are outside the finite-tree model, rather than evidence
+that its waiver theorem applies to them.
 
 Callable arities use the translator's existing currying rules. Result arrows and
 result parameters project to the extra arguments introduced by eta expansion.
@@ -152,6 +154,11 @@ parameter does not prevent release. Other constraints and pattern links do.
 collapse is ordinary findall. Visible residual constraints copy with variables;
 disconnected local variables disappear. No answer wrapper or collection scanner
 is added. State and thread messages use native copying.
+This is an operational constraint policy, not a decision procedure for whether
+every hidden type is inhabited. An open value may carry a pending requirement
+for a type with no currently known members. Discarding that variable can still
+leave an ordinary answer. Equating this behavior with existential projection
+requires the hidden satisfiability hypothesis stated by the mathematical law.
 
 Space assertions retain stable's native assertz semantics. An assertion creates
 fresh variables without their source attributes; it does not change the original
@@ -184,9 +191,11 @@ Compare with a separate baseline checkout, in the same SWI/Janus environment:
   python3 tests/bench_runtime_types.py --baseline BASELINE --output RESULTS
 
 This interleaves three repeats, records runtime source hashes, and verifies the
-untyped execution counts. Public predicate microbenchmarks and complete-program
-timings are reported separately. The old translator's call-site checks are not
-present on its direct Prolog entry route.
+untyped execution counts. Microbenchmarks use compiled MeTTa calls with identical
+declarations on both checkouts: stable's call-site checks and this draft's callee
+checks are both included. Complete-program timings also include loading and
+assertions. Untyped controls are separate regression gates, not the typed
+performance baseline.
 
 Programs without function contracts retain their ordinary compiled bodies,
 dispatcher path and space operations. In a mixed program, a variable-headed
@@ -204,7 +213,8 @@ Refreshed baseline and compatibility record
 
 This draft is based on stable-fixed 5d4b75e, including the independent call-arity
 and partial-call repairs. The checked-entry implementation replaces their legacy
-call-site helpers. The runtime source is unchanged from the previous 0ffddc6 draft.
+call-site helpers. Subsequent commits repair formation and mode checks, eliminate
+vacuous checks, reuse protected structural checks, and reduce watcher overhead.
 
 Two assertions in typed_partial_arguments.metta intentionally differ from the
 baseline: multiple type witnesses now produce one body answer and one effect.
@@ -219,3 +229,6 @@ baseline refresh.
 A variable's evidence is captured once per binding, but a joint frame can be
 validated many times. Open structures can therefore incur quadratic rechecking;
 this implementation does not yet provide incremental solving for every formula.
+The protected structural fragment described above is the implemented exception.
+See TYPING-REVIEW.txt for measured comparisons, compatibility cases and the
+boundary between the generic Lean model and this native implementation.

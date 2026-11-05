@@ -1,0 +1,161 @@
+Runtime contract draft: review notes
+====================================
+
+Base: stable-fixed 5d4b75e. This is a separate typing draft, not an addition to
+any of the standalone compiler-repair PRs. Atom-result templates are retained.
+
+The purpose is one checked function entry, reached by direct, indirect and
+completed partial calls. Existing equations still determine answer order and
+multiplicity. Declarations provide alternative membership evidence and do not
+repeat the body. Reflection through get-type remains independent.
+
+Compatibility
+-------------
+
+The following observations were compared with the current fixed baseline:
+
+Case                                      Stable-fixed        Draft
+Number identity on 2                      (2)                 (2)
+Number identity through a variable,
+  called on "bad"                         ("bad")             ()
+Number input bound to "bad" after call    ("bad")             ()
+One input with two nominal types          (7 7)               (7)
+Shared parameter on 1 and "bad"            ()                  ()
+Unanimous Atom result on (+ x 1)           (+ 2 1)             (+ 2 1)
+Atom declaration after its equation        3                   (+ 2 1)
+Mixed Number->Atom / String->Number,
+  body (+ 1 2), input "s"                  ()                  (3)
+Hidden open input of an uninhabited type   (7)                 (7)
+
+The mixed case uses the draft's explicit unanimity policy: only unanimous Atom
+positions hold or quote. That policy and the separation of reflection from
+enforcement are compatibility changes, not consequences of a generic theorem.
+
+Only two example files are adapted relative to the fixed baseline:
+- typed_partial_arguments: two expectations no longer duplicate answers/effects.
+- types_dependent: derived classifications use explicit application guards.
+These adaptations must accompany any upstream compatibility discussion.
+
+Three execution traces
+----------------------
+
+1. (: inc (-> Number Number)), (= (inc $x) (+ $x 1))
+
+   The public entry checks number(X), suspending on an open X; calls the equation
+   worker; then checks number(Result). Its essential generated body is:
+
+     (var(X) -> type_freeze(X, number(X)); number(X)),
+     Worker(X, Result),
+     (var(Result) -> type_freeze(Result, number(Result)); number(Result)).
+
+   The worker is just +(X, 1, Result). No type query interprets the declaration
+   at each scalar operation.
+
+2. (: same (-> $a $a Bool)), (= (same $x $y) True)
+
+   Entry creates one frame for the two inputs and their shared type witness.
+   The worker returns true once. Exit retains unresolved correlated checks.
+   Binding x to 1 then y to a string fails; binding both to numbers succeeds.
+   A parameter is a shared existential membership witness, not a claim that
+   the function is universally parametric.
+
+3. (: old A), (: new A), (: edit (-> $a $a))
+
+   If edit removes (: old A) and returns new, edit(old) still succeeds.
+   The input retains its evidence from entry; the output is checked at return.
+   A shortcut that merely rereads old's declarations after the body would
+   reject this call incorrectly. Known structure is captured before the body;
+   still-open leaves acquire evidence when bound. No full world is retained.
+
+Implementation and limits
+-------------------------
+
+- types.pl: declarations, entries, shared constraints, modes and refresh hooks.
+- type_membership.pl: compiled membership with the general relation as fallback.
+- type_obligations.pl: native attributed-variable evidence and notification.
+
+Protected ListOf/TupleOf/PairOf structures over Number/String/Bool use local
+delayed checks. A narrowly scoped self-call optimization reuses a checked
+ListOf suffix obtained with cdr-atom. Other inputs/results remain checked;
+contract edits retire the private entry. Arbitrary nominal families and shared
+overloads do not gain these structural assumptions.
+
+The three core files total 656 lines. The optimizations are separate commits,
+so their generated-code transformations can be reviewed independently.
+
+Nested wildcard checking is not implemented. Atom in a function slot remains
+an evaluation convention; outside those slots, mode words remain ordinary
+value-type names. The generic checking-pattern extension is not a hidden
+change to that source policy.
+
+Unrestricted slots do not inspect cyclic host terms. Structural checks reject
+cycles. Finite-tree proofs do not establish behavior on rational trees.
+
+Collection follows native findall: unreturned local constraints disappear.
+This does not decide inhabitation or prove that every discarded requirement
+has a satisfying value. Spaces retain native assertion behavior rather than
+serializing live constraint frames.
+
+Measured costs
+--------------
+
+Three interleaved repetitions, same declared workloads on both checkouts.
+Microbenchmarks enter through compiled MeTTa calls, including stable's call-site
+checks. Complete examples include loading. Times are median CPU seconds.
+
+Workload                         Stable inf.   Draft inf.    Stable s  Draft s
+10,000 typed scalar calls             90,005       60,005      .00262   .00203
+Typed counting, 200,000 steps       2,000,014    1,000,009      .09854   .01730
+Typed constructor walk, 400         1,851,823       83,012      .17413   .00422
+Typed open-variable loop              90,014       70,025      .00430   .00159
+nilbc                            20,100,081   24,815,932       .61502   .81221
+
+The nilbc regression remains: about 23% more inferences and 32% more CPU in
+this run. Watcher changes reduce its previous 31,540,679 inferences by about
+21%; they do not make the stronger contract free. Input evidence is retained.
+
+Ten untyped execution probes match inference counts exactly. This does not
+claim zero load-time or mixed-dispatch overhead. Whole-call residual validation
+can still rescan correlated open structures; the linear improvement applies
+to the protected fragment above.
+
+Mathematical correspondence and trust boundary
+----------------------------------------------
+
+These names refer to the generic MeTTapedia ConstraintTypes library:
+
+Specification result                    Corresponding runtime obligation
+DeclarationTyping.check_iff              type_member / type_evidence_has
+OpenTyping.compile_correct               residual evidence and later bindings
+CallTyping.frame_exact                   types_enter / types_exit
+DeterminedMembership
+  .compiled_membership_correct           type_code_goal, under its premises
+UnsharedParameters.waive_joint_iff        singleton-slot omission, with coverage
+RuntimeTyping.CanonicalTypes
+  .waive_joint_iff_on_ground              coverage in models containing its facts
+CheckCost.entry_check_covers_suffixes    reuse of protected ListOf suffix checks
+CheckCost.incremental_exact              per-part structural checking
+Refresh.update_eq_fresh_compile          declaration dependency/refresh tracking
+
+These are specifications and conditional laws, not a proof that the handwritten
+Prolog predicates implement them. The native emitter, source interpretation,
+SWI attributes, copying and database operations are outside that proof.
+Canonical coverage is proved for ground finite atoms in the stated model; its
+embedding into native membership remains an implementation obligation.
+CheckingPolicy describes a separately labelled proposed wildcard/body policy.
+It is not the selected Atom-template convention of this draft.
+
+Validation
+----------
+
+106 runtime tests, 49 definition-order tests and 10 parser tests pass normally
+and under -O. The example run passes 177 files / 786 assertions with the usual
+interactive exclusions. The new watcher controls cover independent constraints
+after discharge/copy and a later compatible witness/overload with one effect.
+Compiled and general membership also agree on the additional edit audit.
+
+The source hashes remained unchanged during the benchmark. Passing these
+checks establishes the recorded cases, not universal correctness or a promise
+of production acceptance. The remaining performance and policy differences
+above are part of the review, rather than hidden prerequisites.
+
