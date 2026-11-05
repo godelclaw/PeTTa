@@ -273,7 +273,8 @@ test(compiled_membership_agrees_with_the_general_relation) :-
       [oc_List,'Number'],[oc_List,'String'],['ListOf','Number'],['ListOf','String'],
       ['TupleOf'],['TupleOf','Number'],['TupleOf',oc_Colour,'Number'],
       ['PairOf',oc_Colour,'Number'],['Opaque',host,1],['Opaque',partial,2],
-      [->,'Number','Number'],[->,'Number'],[],['Number'],['Number','Number']],
+      [->,'Number','Number'],[->,'Number'],[],['Number'],['Number','Number'],
+      ['ListOf','ListOf'],['PairOf','Number','ListOf'],[oc_List,'TupleOf']],
     forall((member(V,Values),member(T,Types)),
       ((user:type_ground_check(T,V)->General=true;General=false),
        user:type_code_goal(T,V,[],Goal),(user:call(Goal)->Compiled=true;Compiled=false),
@@ -294,6 +295,14 @@ test(open_nominal_patterns_stay_jointly_constrained) :-
 test(curried_declarations_guard_and_describe_the_function) :-
     program("(: rt_cur (-> Number (-> Number Number))) (= (rt_cur $x $y) (+ $x $y)) (: rt_takes_cur (-> (-> Number (-> Number Number)) Number)) (= (rt_takes_cur $g) (($g 1) 2)) (: rt_takes_flat (-> (-> Number Number Number) Number)) (= (rt_takes_flat $g) ($g 1 2)) !(rt_takes_cur rt_cur) !(rt_takes_flat rt_cur) !(collapse (rt_cur \"bad\" 2)) !(collapse (rt_takes_cur (rt_cur 0)))",R),
     assertion(R == [3,3,[],[]]).
+test(ill_kinded_checks_give_ground_and_open_values_the_same_answer) :-
+    program("(: kg_top (-> (ListOf ListOf) Number)) (= (kg_top $x) 7)
+      (: kg_Box (-> (ListOf ListOf) kg_BoxT)) (: kg_field (-> kg_BoxT Number)) (= (kg_field $b) 7)
+      (: kg_nested (-> (ListOf _) Number)) (= (kg_nested $x) 7)
+      !(collapse (kg_top ())) !(collapse (let $r (kg_top $x) (let $x () $r)))
+      !(collapse (kg_field (kg_Box ()))) !(collapse (let $r (kg_field (kg_Box $x)) (let $x () $r)))
+      !(collapse (kg_nested ())) !(collapse (let $r (kg_nested $x) (let $x () $r)))",R),
+    assertion(R == [[],[],[],[],[],[]]).
 test(nested_families_compile_to_indexed_membership) :-
     T=['ListOf',['ListOf','Number']],user:type_code_goal(T,_,[],_),
     assertion(user:type_member_code('ListOf',['ListOf','Number'],_)),

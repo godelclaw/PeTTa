@@ -7,9 +7,15 @@ type_ground_check(T,V) :- once(type_member(V,T,[])).
 type_member_key(T,Key) :- (atom(T)->Key=T;T=[Head|_],atom(Head)->Key=Head;Key='$other').
 % A family recurring inside itself compiles while it shrinks to a part of the
 % enclosing type; a growing (non-regular) family uses the general check.
+% Like the general relation, compiled membership admits no value of an
+% ill-kinded type, including a declared field type. Kinds are checked
+% only while code is generated.
 type_code_goal(T,V,Seen,Goal) :-
     (type_inline_primitive(T,V,Goal) -> true
-    ; ground(T),type_member_key(T,Key),
+    ; \+ \+ type_kind(T) -> type_code_goal_kinded(T,V,Seen,Goal)
+    ; Goal = fail ).
+type_code_goal_kinded(T,V,Seen,Goal) :-
+    ( ground(T),type_member_key(T,Key),
       (member(Ancestor,Seen),type_member_key(Ancestor,Key),Ancestor\==T,\+ (sub_term(S,Ancestor),S==T)
         -> Goal=type_ground_check(T,V)
       ; type_code(T,Seen,Name),Goal=..[Name,V]) ).
