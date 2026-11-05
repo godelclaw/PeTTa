@@ -1,8 +1,9 @@
 """Compare runtime contracts with a separate baseline checkout.
 
 Run in the same SWI/Janus environment as test.sh. Requires GNU time.
-Microbenchmarks call public Prolog entries; legacy call-site guards are absent
-on that route. Heavy workloads include loading and application assertions.
+Microbenchmarks use compiled MeTTa calls, including legacy call-site guards.
+Typed workloads keep the same declarations on both checkouts. Untyped workloads
+are separate regression gates. Heavy workloads include loading and assertions.
 """
 import argparse
 import hashlib
@@ -56,7 +57,7 @@ def main():
     dest.mkdir(parents=True, exist_ok=True)
     roots = [("stable", args.baseline.resolve()), ("candidate", ROOT)]
     state = {label: source_state(root) for label, root in roots}
-    report = {"sources": state, "cases": []}
+    report = {"sources": state, "route": "compiled_metta_call", "cases": []}
 
     def save():
         (dest / "results.json").write_text(json.dumps(report, indent=2) + "\n")

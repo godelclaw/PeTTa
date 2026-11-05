@@ -5,17 +5,21 @@ runtime_measure(Goal,Info) :-
     statistics(cputime,T1),statistics(inferences,I1),
     Inf is I1-I0,CPU is T1-T0,Info=_{inferences:Inf,cpu:CPU}.
 
-% Measure public predicate entries, including their checks. Loading is separate.
+% Measure a compiled MeTTa call. This includes legacy call-site checks as well
+% as the candidate's callee checks; direct Prolog entries omit the former.
 runtime_bench_main :- current_prolog_flag(argv,[Source,Kind,Size|_]),atom_number(Size,N),
     runtime_measure(load_metta_file(Source,_),Load),
+    (memberchk(Kind,[count,relation])->Call=[bf,A,B],Head=runtime_bench_call(A,B,R)
+    ;Call=[bf,A],Head=runtime_bench_call(A,R)),
+    translate_expr(Call,Goals,R),goals_list_to_conj(Goals,Body),assertz((Head:-Body)),
     runtime_bench_goal(Kind,0,Warm),once(Warm),
     runtime_bench_goal(Kind,N,Goal),runtime_measure(Goal,Info),
     put_dict(load,Info,Load,All),json_write_dict(current_output,All),nl.
-runtime_bench_goal(count,N,(bf(N,0,R),R=:=N)).
-runtime_bench_goal(relation,N,(bf(N,X,R),X=7,R=7)).
-runtime_bench_goal(list,N,(bf(L,R),R=:=N)) :- runtime_bench_list(N,L).
-runtime_bench_goal(small,0,bf(1,_)) :- !.
-runtime_bench_goal(small,N,forall(between(1,N,_),(bf(1,R),R=2))).
+runtime_bench_goal(count,N,(runtime_bench_call(N,0,R),R=:=N)).
+runtime_bench_goal(relation,N,(runtime_bench_call(N,X,R),X=7,R=7)).
+runtime_bench_goal(list,N,(runtime_bench_call(L,R),R=:=N)) :- runtime_bench_list(N,L).
+runtime_bench_goal(small,0,runtime_bench_call(1,_)) :- !.
+runtime_bench_goal(small,N,forall(between(1,N,_),(runtime_bench_call(1,R),R=2))).
 runtime_bench_list(0,'Nil') :- !.
 runtime_bench_list(N,['Cons',1,T]) :- M is N-1,runtime_bench_list(M,T).
 
