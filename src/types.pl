@@ -41,7 +41,7 @@ type_eta_allowed(F,N) :-
 
 type_mode(T) :- nonvar(T), memberchk(T, ['Atom','Variable','Symbol','Expression','Grounded']).
 type_observe(T, V) :- ( T == 'Atom' -> true ; T == 'Variable' -> var(V)
-    ; var(V) -> true ; metatype_of(V, M), M == T ).
+    ; var(V) -> true ; 'get-metatype'(V, M), M == T ).
 type_normalize(T, R) :- ( var(T) -> R = T
     ; (T == '%Undefined%'; T == '_') -> R = '$any'(true)
     ; is_list(T),T=[Tag|_],Tag==(->) -> R=T

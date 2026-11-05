@@ -65,6 +65,17 @@ test(known_bad_constructor_head_fails_before_open_tail) :-
 test(variable_mode_observed_before_head_matching) :-
     program("(: rt_variable (-> Variable Number)) (= (rt_variable 2) 7) !(rt_variable $x) !(collapse (rt_variable 2))",R),
     assertion(R == [7,[]]).
+test(metatype_modes_observe_the_value_shape) :-
+    program("(: rt_expr (-> Expression Number)) (= (rt_expr $a) 1)
+      (: rt_sym (-> Symbol Number)) (= (rt_sym $a) 1)
+      (: rt_gr (-> Grounded Number)) (= (rt_gr $a) 1)
+      (: rt_mkexpr (-> Number Expression)) (= (rt_mkexpr $n) (a $n))
+      (: rt_mksym (-> Number Symbol)) (= (rt_mksym $n) (a $n))
+      !(collapse (rt_expr (a b))) !(collapse (rt_expr foo))
+      !(collapse (rt_sym foo)) !(collapse (rt_sym (a b)))
+      !(collapse (rt_gr 3)) !(collapse (rt_gr foo))
+      !(collapse (rt_mkexpr 1)) !(collapse (rt_mksym 1))",R),
+    assertion(R == [[1],[],[1],[],[1],[],[[a,1]],[]]).
 test(repeated_nominal_pattern) :-
     program("(: (rt_Pair $x $x) rt_Same) (: rt_pair_check (-> rt_Same Number)) (= (rt_pair_check $x) 7) !(rt_pair_check (rt_Pair 1 1)) !(collapse (rt_pair_check (rt_Pair 1 2)))",R),
     assertion(R == [7,[]]).
