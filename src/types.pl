@@ -326,6 +326,7 @@ type_tail_target(A,W,Schema,Tail) :- atom_concat('$tail$',W,Tail),
     append(Inputs,[_],Schema),maplist(type_inline_slot(Schema),Inputs,Values,Checks),
     append(Checks,[Call],Goals),
     exclude(==(true),Goals,Needed),goals_list_to_conj(Needed,Body),
+    (retract(type_redirect(Tail,Ref)) -> erase(Ref); true),
     assertz((Head:-Body)),assertz(type_tail_entry(W,Tail)).
 type_worker_name(F, A, W) :- type_worker(F,A,W), !.
 type_worker_name(F,A,W) :- flag(type_worker,I,I+1),format(atom(Candidate),'$body$~d',[I]),
@@ -345,8 +346,12 @@ type_publish_arity(F, A, W) :-
          (retract(no_equations_clause(F,A,Empty)) -> erase(Empty); true),
          assertz((Head :- Body), Entry), assertz(type_wrapper(F,A,Entry))
     ; type_retire_worker(F,A,W) ).
+% A retired tail entry keeps only its redirect, so a running caller is checked
+% once, under the current contract.
 type_retire_worker(F,A,W) :- type_redirect_worker(F,A,W),
-    (type_tail_entry(W,Tail)->type_redirect_worker(F,A,Tail);true).
+    (retract(type_tail_entry(W,Tail)) ->
+       length(Args,A),Head=..[Tail|Args],retractall(Head),type_redirect_worker(F,A,Tail)
+    ;true).
 type_redirect_worker(F,A,W) :-
     (type_redirect(W,_) -> true
     ;length(Args,A),Head=..[W|Args],Call=..[F|Args],

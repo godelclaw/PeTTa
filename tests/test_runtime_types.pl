@@ -397,6 +397,13 @@ test(tail_call_observes_a_newly_admitted_input) :-
 test(tail_call_observes_a_changed_result_contract) :-
     program("(: ri_result (-> Number Number)) (= (ri_result $n) (if (== $n 0) 7 (let $_ (remove-atom &self (: ri_result (-> Number Number))) (let $_ (add-atom &self (: ri_result (-> Number String))) (ri_result 0))))) !(collapse (ri_result 1))",R),
     assertion(R == [[]]).
+test(tail_call_after_a_contract_edit_answers_once) :-
+    program("(: ri_loose (-> Number Number)) (= (ri_loose $n) (if (== $n 0) 7 (let $_ (remove-atom &self (: ri_loose (-> Number Number))) (let $_ (add-atom &self (: ri_loose (-> $a Number))) (ri_loose 0))))) !(collapse (ri_loose 1))
+      (: ri_same (-> Number Number)) (= (ri_same $n) (if (== $n 0) 7 (let $_ (remove-atom &self (: ri_same (-> Number Number))) (let $_ (add-atom &self (: ri_same (-> Number Number))) (ri_same 0))))) !(collapse (ri_same 1))",R),
+    assertion(R == [[7],[7]]).
+test(a_reused_worker_tail_call_answers_once) :-
+    program("(: ri_reuse (-> Number Number)) (= (ri_reuse $n) (if (== $n 0) 7 (ri_reuse 0))) !(remove-atom &self (= (ri_reuse $n) (if (== $n 0) 7 (ri_reuse 0)))) (= (ri_reuse $n) (if (== $n 0) 7 (ri_reuse 0))) !(collapse (ri_reuse 1))",R),
+    assertion(R == [true,[7]]).
 test(disjoint_nominal_evidence_does_not_generate_type_lists) :-
     call_with_time_limit(2,program("(: ri_a ri_A) (: ri_b ri_B) (: ri_disjoint (-> $a $a)) (= (ri_disjoint $x) ri_b) !(collapse (ri_disjoint ri_a))",R)),
     assertion(R == [[]]).
