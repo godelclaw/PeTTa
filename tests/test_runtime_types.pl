@@ -10,6 +10,10 @@ runtime_wrap_once(X,_) :- user:ri_wrap(X,[_]).
 runtime_stack_delta(F,Extra,N,Delta) :-
     append([N|Extra],[AtBase],Args),Goal=..[F|Args],statistics(localused,Before),
     once(user:call(Goal)),Delta is AtBase-Before.
+runtime_open_cells(T,0) :- !,T=[].
+runtime_open_cells(T,N) :- T=[N|Rest],M is N-1,runtime_open_cells(Rest,M).
+runtime_open_cost(N,Cost) :- user:rt_open_cells(L,_),statistics(inferences,Before),
+    runtime_open_cells(L,N),statistics(inferences,After),Cost is After-Before.
 runtime_input_barrier(Events,Release) :-
     thread_send_message(Events,entered),
     (thread_get_message(Release,resume,[timeout(5)])->true;throw(runtime_barrier_timeout)).
@@ -76,6 +80,24 @@ test(metatype_modes_observe_the_value_shape) :-
       !(collapse (rt_gr 3)) !(collapse (rt_gr foo))
       !(collapse (rt_mkexpr 1)) !(collapse (rt_mksym 1))",R),
     assertion(R == [[1],[],[1],[],[1],[],[[a,1]],[]]).
+% An open value of a structural type is checked one known part at a time.
+test(open_structural_values_check_each_binding) :-
+    program("(: rt_nums (-> (ListOf Number) Number)) (= (rt_nums $l) 1)
+      (: rt_strs (-> (ListOf String) Number)) (= (rt_strs $l) 1)
+      (: rt_tup (-> (TupleOf Number String) Number)) (= (rt_tup $t) 1)
+      (: rt_pair (-> (PairOf Number (ListOf String)) Number)) (= (rt_pair $p) 1)
+      (: rt_deep (-> (ListOf (ListOf Number)) Number)) (= (rt_deep $l) 1)",_),
+    user:rt_nums(L,_),L=[1|T],assertion(\+ T=["bad"|_]),assertion(\+ T=L),assertion(\+ T=foo),
+    T=[X|U],assertion(\+ X=a),X=2,U=[],
+    user:rt_tup(P,_),P=[A|B],assertion(\+ A="s"),assertion(\+ B=[]),assertion(\+ B=["s",1]),B=[S],S="s",A=1,
+    user:rt_pair(Q,_),Q=[N|R],assertion(\+ R=[1]),assertion(\+ N="n"),R=["a"],N=1,
+    user:rt_deep(D,_),D=[I|J],I=[1|K],assertion(\+ K=[x]),K=[],J=[[]],
+    user:rt_nums([Y],_),user:rt_strs([Z],_),Y=Z,assertion(\+ Y=1),assertion(\+ Y="s"),
+    program("(: rt_fake Number)",_),user:rt_nums(F,_),assertion(\+ F=[rt_fake]).
+test(binding_an_open_list_cell_by_cell_is_linear) :-
+    program("(: rt_open_cells (-> (ListOf Number) Number)) (= (rt_open_cells $l) 1)",_),
+    runtime_open_cost(1000,Small),runtime_open_cost(4000,Large),
+    assertion(Large < 6*Small).
 test(repeated_nominal_pattern) :-
     program("(: (rt_Pair $x $x) rt_Same) (: rt_pair_check (-> rt_Same Number)) (= (rt_pair_check $x) 7) !(rt_pair_check (rt_Pair 1 1)) !(collapse (rt_pair_check (rt_Pair 1 2)))",R),
     assertion(R == [7,[]]).

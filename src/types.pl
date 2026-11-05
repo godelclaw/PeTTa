@@ -384,7 +384,24 @@ type_inline(T,V,Goal) :-
 type_inline(T,_,true) :- (T == 'Atom'; T == '%Undefined%'; T == '_'),!.
 type_inline(T,V,Goal) :- ground(T),\+ type_mode(T),
     type_code_goal(T,V,[],Fast),
-    Goal=(ground(V) -> acyclic_term(V),once(Fast);types_enter([[T,'_']],[V],_)).
+    (type_structural(T) -> Open=(acyclic_term(V),type_parts(T,V)) ; Open=types_enter([[T,'_']],[V],_)),
+    Goal=(ground(V) -> acyclic_term(V),once(Fast);Open).
+
+% A type built from ListOf, TupleOf, PairOf and the primitive types has the
+% same members in every declaration view. An open value of such a type is
+% checked one known part at a time: each binding checks only the structure it
+% adds, and an unknown part waits for its own binding.
+type_structural(T) :- atom(T),!,memberchk(T,['Number','String','Bool']).
+type_structural(['ListOf',T]) :- !,type_structural(T).
+type_structural(['PairOf',A,B]) :- !,type_structural(A),type_structural(B).
+type_structural(['TupleOf'|Ts]) :- maplist(type_structural,Ts).
+type_parts(T,V) :- type_inline_primitive(T,V,Test),!,(var(V)->type_freeze(V,Test);Test).
+type_parts(T,V) :- var(V),!,type_freeze(V,type_parts_bound(T,V)).
+type_parts(T,V) :- type_part(T,V).
+type_parts_bound(T,V) :- acyclic_term(V),type_part(T,V).
+type_part(['ListOf',E],V) :- (V==[] -> true;V=[H|Tail],type_parts(E,H),type_parts(['ListOf',E],Tail)).
+type_part(['TupleOf'|Ts],V) :- (Ts==[] -> V==[];Ts=[A|As],V=[H|Tail],type_parts(A,H),type_parts(['TupleOf'|As],Tail)).
+type_part(['PairOf',A,B],[H|Tail]) :- type_parts(A,H),type_parts(B,Tail).
 
 % Argument plans are inspected before evaluation, only when holding can matter.
 type_call_schemas(F,N,Schemas) :- A is N+1,

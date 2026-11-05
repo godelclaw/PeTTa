@@ -90,8 +90,12 @@ Compilation and live edits
 
 Each checked source predicate has one public entry and internal equation
 workers. Primitive monomorphic guards compile to native tests. Ground named and
-constructor membership compile to indexed Prolog clauses. Open values retain a
-joint contract, including every still-possible declaration and type assignment.
+constructor membership compile to indexed Prolog clauses. Open values of named
+or constructor types retain a joint contract, including every still-possible
+declaration and type assignment. A type built only from ListOf, TupleOf, PairOf,
+Number, String and Bool has the same members in every declaration view, so an
+open value of such a type is checked one known part at a time: each binding
+checks only the structure it adds.
 With a single signature, independent slots compile directly to their checks;
 only shared parameters and non-ground structured types need a joint frame.
 Constructor templates are cached in the current declaration view; edits invalidate
