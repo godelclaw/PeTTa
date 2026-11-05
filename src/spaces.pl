@@ -22,6 +22,8 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
                                  maybe_print_compiled_clause("added function", Term, Clause).
 
 %Add an atom to the space:
+'add-atom'(Space, Term, true) :- Space=='&self', nonvar(Term), Term=[Tag,F,D], Tag==(:), !,
+    with_mutex(petta_definitions, transaction((add_sexp('&self',Term),type_index_add(F,D),type_rebuild_declaration(D),type_declaration_changed(F)))).
 'add-atom'(Space, Term, true) :- add_sexp(Space, Term).
 
 %%A removal with an unknown function name must not erase program rows:
@@ -31,10 +33,16 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|_],_], atom(F), !,
                                        with_mutex(petta_definitions, transaction((
                                        remove_sexp(Space, Term, Removed),
-                                       findall(Ref-A, ( translated_from(Ref, Term), clause(H, _, Ref), functor(H, F, A) ), Refs),
+                                       findall(Ref-A, ( translated_from(Ref, Term), equation_arity(F, A, Ref) ), Refs),
                                        ( Refs = [] -> true ; removed_equations(F, Refs) ) ))).
 
 %Remove all same atoms:
+'remove-atom'(Space, Term, Removed) :- Space=='&self', nonvar(Term), Term=[Tag,_,_], (var(Tag);Tag==(:)), !,
+    with_mutex(petta_definitions, transaction((
+      findall(F-T,(type_declaration(F,T),copy_term(Term,Pattern),Pattern=[:,F,T]),Raw),
+      remove_sexp('&self',Term,Removed),type_index_remove(Term),
+      forall(member(_-D,Raw),type_rebuild_declaration(D)),
+      findall(F,member(F-_,Raw),Names),sort(Names,Fs),forall(member(F,Fs),type_declaration_changed(F))))).
 'remove-atom'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).
 
 % A space is a predicate per row arity, created by the first add-atom. Reading

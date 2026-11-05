@@ -45,13 +45,13 @@
 !(test ((part-first (part-once)) "ok") 4)
 !(test (get-state &part-count) 1)
 
-; Unrelated parametric calls keep their existing answer/effect multiplicity.
+; Multiple type witnesses do not multiply the body answers or effects.
 (: part-value part-A)
 (: part-value part-B)
 (: part-poly (-> $a Number %Undefined%))
 (= (part-poly $x $n) (let $_ (add-atom &part-poly-effects ran) 7))
-!(test (collapse ((part-poly part-value) 1)) (7 7))
-!(test (collapse (match &part-poly-effects ran counted)) (counted counted))
+!(test (collapse ((part-poly part-value) 1)) (7))
+!(test (collapse (match &part-poly-effects ran counted)) (counted))
 
 ; Overloaded calls retain their existing signature-selection behavior.
 (: part-over (-> Number Number %Undefined%))

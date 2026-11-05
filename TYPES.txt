@@ -1,0 +1,203 @@
+Runtime predicate contracts
+==========================
+
+A function declaration guards complete calls to its predicate. The equations
+keep their order and multiplicity. Alternative declarations supply alternative
+type evidence; they do not run the equations more than once.
+
+A call admits one declaration and one assignment shared by all of its type
+parameters. Known input evidence is retained while the body runs. Result
+membership uses the declarations visible when the result is checked. Unknown
+value leaves acquire their evidence when they bind. No reflective get-type
+query is involved in enforcement.
+
+The three implementation units are:
+
+  types.pl              declaration indexes, boundaries, shared type solving,
+                        argument modes, and definition-lifecycle integration
+  type_membership.pl    direct membership clauses for ground type expressions
+  type_obligations.pl   one native attribute and evidence cell per open value
+
+Declarations and values
+----------------------
+
+  (: red Colour)
+  (: Nil (List $a))
+  (: Cons (-> $a (List $a) (List $a)))
+  (: same (-> $a $a Bool))
+
+Named facts describe whole values. A fact about a whole value establishes no
+property of its fields. Constructor declarations describe their fields and
+result together, using fresh parameters for each constructor occurrence.
+Nominal patterns may contain repeated variables. A pattern instantiates the
+parameters it shares with its type from the matched value, so (: (Tag $t $v)
+(Tagged $t)) gives (Tag Number 1) the type (Tagged Number). Unknown parts of an
+open value stay pending until they bind.
+
+Number, String and Bool check the actual primitive representation. A declaration
+cannot cast other representations into these types or the predefined structural
+types. Data constructors have a named result family; a bare result parameter is
+not a datatype definition. Type parameters range over proper types, excluding
+unapplied built-in type constructors and function-slot wildcard annotations.
+Primitive values can also have nominal evidence, such as (: 2 Even). This is
+an alternative to their canonical type, available to shared type parameters.
+Unannotated atoms have the canonical Symbol type. Other atomic names use their
+declared nominal types. Native lists support structural tuple types, ListOf,
+TupleOf and PairOf; opaque host terms have an Opaque descriptor.
+
+Function-valued arguments have declared interface descriptions. This is runtime
+membership checking, not a proof of a function body's universal parametricity or
+totality. Actual calls still go through their function's boundary. An incomplete
+application is a value; its eventual complete invocation checks the inputs.
+Partial-value interface checking also checks the captured proper input types.
+A function value accepts its inputs in curried groups, as partial application
+does: a binary function on numbers is both (-> Number Number Number) and
+(-> Number (-> Number Number)). A declaration with an explicit function result
+also describes equations that take those inputs directly.
+
+Modes are selected before argument evaluation
+-------------------------------------------
+
+Literal Atom in a function slot requests syntax. An argument is held only when
+all declarations applicable to that callable arity request Atom at that position.
+Mixed requests evaluate once. The same unanimous rule selects Atom result
+quoting. Variable, Symbol, Expression and Grounded observe the value at entry or
+return; they do not require that observation to remain true after later binding.
+An open value provisionally passes Symbol, Expression and Grounded; Variable
+requires an open value at that point. These modes install no delayed requirement.
+%Undefined% and _ impose no membership requirement.
+
+These are syntactic function-slot observations. A parameter later instantiated
+to the ordinary type name Atom gains no holding power. Within constructor
+fields, mode words are ordinary value-type names. Arrow interface descriptions
+retain their slot annotations.
+
+Callable arities use the translator's existing currying rules. Result arrows and
+result parameters project to the extra arguments introduced by eta expansion.
+A specified nonfunction result keeps the declared source arity, so a closure is
+checked as a result rather than silently changing that function's signature.
+
+Compilation and live edits
+--------------------------
+
+Each checked source predicate has one public entry and internal equation
+workers. Primitive monomorphic guards compile to native tests. Ground named and
+constructor membership compile to indexed Prolog clauses. Open values retain a
+joint contract, including every still-possible declaration and type assignment.
+With a single signature, independent slots compile directly to their checks;
+only shared parameters and non-ground structured types need a joint frame.
+Constructor templates are cached in the current declaration view; edits invalidate
+the affected head and the open-head list. A cache miss builds under the existing
+definition mutex. Ordinary checks use the installed templates without a mutex.
+
+Clause ownership, source records, arity refresh, mutexes and transactions are the
+existing definition lifecycle. There is no second program-update engine. Generated
+membership and call-entry names stay stable when their clauses are rebuilt.
+Future callers use the refreshed argument plan; an already-entered caller keeps
+its compiled evaluation decisions, following the existing logical update view.
+Native procedures and memo dispatch have generated contract entries as well;
+an already-entered caller reaches the current entry on its next nested call.
+
+Input checks precede equation-head matching. The original output argument is
+passed to the worker, preserving existing caller constraints and head-unification
+order. The callee's result check follows the body, so the body's effects and
+errors are never suppressed by it. Eligible tail self-calls use a private checked
+entry and share their enclosing call's result check. Contract changes retire
+that entry into a call to the current public predicate, including its result
+contract. This handles both widened and narrowed inputs and changed outputs.
+Input guards remain before head matching. Typed tail recursion keeps constant
+stack space; its checked entry adds one predicate call per iteration.
+
+Input evidence is collected at entry, including parameters that only relate an
+input to the result. The assignment remains undecided until the result supplies
+enough information. This keeps the evidence across ordinary backtracking,
+collection, transaction rollback, and edits by another thread, without mutation
+notifications or a list of active frames. An identical input/result value under
+unchanged declarations can reuse this evidence with only a finiteness check.
+
+An identical input/result check can be reused only when the relevant native
+database generations are unchanged. These integers test a reuse premise; they
+retain no historical environment and pin no version. Otherwise the ordinary
+result check runs. SWI's transaction behavior for this metadata is documented at
+https://www.swi-prolog.org/pldoc/man?section=transaction-impact .
+
+Open values and storage
+-----------------------
+
+One variable has one shared evidence cell and a list of affected contracts.
+Binding it records its new evidence once, then checks those contracts. Private
+cells are attributed too, preserving their identity through native copying.
+Completed vacuous contracts release their input records and remove their variable
+watchers; finiteness checks remain. A kind-only attribute on a private type
+parameter does not prevent release. Other constraints and pattern links do.
+
+collapse is ordinary findall. Visible residual constraints copy with variables;
+disconnected local variables disappear. No answer wrapper or collection scanner
+is added. State and thread messages use native copying.
+
+Space assertions retain stable's native assertz semantics. An assertion creates
+fresh variables without their source attributes; it does not change the original
+variables or their requirements. Retrieved variables are fresh untyped data, and
+subsequent declared calls check them at their boundary. Spaces therefore perform
+no attribute scans or residual-goal serialization. This deliberately differs from
+native findall/state/message copies, which preserve attributes. Constraint-
+preserving persistence is a separate capability, outside this runtime core.
+
+The test diagnostic compares answer syntax independently of internal attributes.
+Tests that concern constraints explicitly attempt the relevant later bindings.
+
+Scope and validation
+--------------------
+
+get-type continues to answer reflective queries, including user extensions.
+Derived classifications can be queried explicitly by application guards, as in
+examples/types_dependent.metta. They are not silently invoked by the runtime
+boundary. Alias/Refine syntax and a static checker are outside this core.
+Indirect calls retain reduce/2's existing exception handling.
+
+The design follows the generic ConstraintTypes declaration and constraint
+semantics. This Prolog implementation is hand-written; the Lean results are not
+a verification of its emitter, native attributes or complete source elaboration.
+
+  swipl -q -s tests/test_runtime_types.pl -g run_tests -t halt -- --silent
+
+Compare with a separate baseline checkout, in the same SWI/Janus environment:
+
+  python3 tests/bench_runtime_types.py --baseline BASELINE --output RESULTS
+
+This interleaves three repeats, records runtime source hashes, and verifies the
+untyped execution counts. Public predicate microbenchmarks and complete-program
+timings are reported separately. The old translator's call-site checks are not
+present on its direct Prolog entry route.
+
+Programs without function contracts retain their ordinary compiled bodies,
+dispatcher path and space operations. In a mixed program, a variable-headed
+call with computed arguments may need a mode lookup before evaluation; a call
+whose arguments are already values still uses plain reduce. Definition loading
+performs compiler bookkeeping.
+There is no guard-erasure pass beyond tail self-calls: other recursive calls check
+their boundaries. Non-tail result checks retain stack frames, and structural
+recursion can recheck tails.
+The benchmark record must include these costs and polymorphic workloads, not
+just scalar and constructor microbenchmarks.
+
+Refreshed baseline and compatibility record
+------------------------------------------
+
+This draft is based on stable-fixed 5d4b75e, including the independent call-arity
+and partial-call repairs. The checked-entry implementation replaces their legacy
+call-site helpers. The runtime source is unchanged from the previous 0ffddc6 draft.
+
+Two assertions in typed_partial_arguments.metta intentionally differ from the
+baseline: multiple type witnesses now produce one body answer and one effect.
+Ordinary equation multiplicity remains unchanged. types_dependent.metta continues
+to use explicit application guards for reflective classifications.
+
+Mode unanimity and the separation of get-type from enforcement are draft policies
+that need compatibility review. Functions with unanimously Atom results retain
+their template behavior. No new nested wildcard policy is introduced by this
+baseline refresh.
+
+A variable's evidence is captured once per binding, but a joint frame can be
+validated many times. Open structures can therefore incur quadratic rechecking;
+this implementation does not yet provide incremental solving for every formula.

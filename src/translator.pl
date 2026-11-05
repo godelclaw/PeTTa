@@ -28,7 +28,7 @@ translate_clause(Input, (Head :- BodyConj), ConstrainArgs) :-
                                                     ExpOut = BodyExpr
                                                   ; translate_expr(BodyExpr, GoalsBody, ExpOut) ),
                                                (  nonvar(ExpOut), ExpOut = partial(Base,Bound),
-                                                  length(Bound, N),
+                                                  length(Bound, N), type_eta_allowed(F,SourceArity),
                                                   eta_expansion_arity(Base, N, Arity)
                                                -> M is (Arity - N) - 1,
                                                   length(ExtraArgs, M), append(Bound, ExtraArgs, CallInArgs),
@@ -70,13 +70,14 @@ note_translation_use(F, Use) :-
       -> translation_key(F, Use, Key), nb_setarg(1, Box, [use(F, Use, Key)|Old])
     ; true ).
 
+translation_key('$argument_modes', modes, Key) :- !, (type_raw_calls -> Key=raw; Key=plain).
 translation_key(F, data, Key) :- ( fun(F) -> Key = function ; Key = data ).
 translation_key(F, pattern, Key) :-
     ( fun(F) -> findall(A, arity(F, A), As), sort(As, Key) ; Key = data ).
 translation_key(F, call(N), Key) :-
     ( \+ fun(F) -> Key = data
     ; A is N + 1,
-      findall(T, catch(match('&self', [':', F, T], T, T), _, fail), Ts), sort(Ts, Types),
+      type_schemas(F,N,Types),
       ( arity(F, A)
         -> length(Args, N), resolve_memoization(F, Args, Out, Goal),
            ( Goal =.. [F|Direct], append(Args, [Out], Direct) -> Memo = direct ; Memo = memo ),
@@ -109,6 +110,7 @@ forget_translation(Ref) :-
 % runtime lookup added to them. SWI's logical update view still applies at
 % each callee entry, including in an already-running caller.
 register_signature(Owner, F, A) :-
+    type_public_name(F),
     assertz(pending_signature(F, A, Owner)),
     ( fun(F) -> true ; assertz(fun(F)) ),
     ( arity(F, A) -> true ; assertz(arity(F, A)) ),
@@ -118,7 +120,8 @@ register_file_signatures(space_only, _, space_only) :- !.
 register_file_signatures(compile_functions, Forms, compile_functions(Owner)) :-
     flag(metta_file_signatures, Owner, Owner + 1),
     with_mutex(petta_definitions, transaction(
-        ( findall(F-A, ( member(parsed(function, _, [=, [F|Args], _]), Forms),
+        (
+          findall(F-A, ( member(parsed(function, _, [=, [F|Args], _]), Forms),
                          length(Args, N), A is N + 1 ), Signatures),
           forall(member(F-A, Signatures), register_signature(Owner, F, A)),
           findall(F, member(F-_, Signatures), Fs), sort(Fs, Functions),
@@ -133,6 +136,7 @@ finish_file_signatures(compile_functions(Owner)) :- with_mutex(petta_definitions
       forall(member(F, Fs), (sync_function_arities(F), refresh_users(F, []))) ) )).
 
 install_definition(Space, Term, Owner, Clause) :-
+    type_plain_source(Term),
     with_mutex(petta_definitions, transaction(
         ( Term = [=, [F|Args], _], length(Args, N), A is N + 1,
           ( Owner == runtime -> register_signature(Owner, F, A) ; true ),
@@ -146,7 +150,8 @@ install_definition(Space, Term, Owner, Clause) :-
 assert_equation(Term, Clause, Uses, Ref) :-
     Clause = (Head :- _), functor(Head, F, A),
     ( retract(no_equations_clause(F, A, Empty)) -> erase(Empty) ; true ),
-    assertz(Clause, Ref), assertz(equation_arity(F, A, Ref)), record_translation(Ref, Term, Uses).
+    type_store_clause(Term, Clause, Stored),
+    assertz(Stored, Ref), assertz(equation_arity(F, A, Ref)), record_translation(Ref, Term, Uses),type_update_dispatch(F).
 
 install_lambda(Term, Clause) :- with_mutex(petta_definitions, transaction(
     ( compile_equation(Term, Clause, Uses), assert_equation(Term, Clause, Uses, _),
@@ -189,7 +194,7 @@ refresh_users(F, Path) :-
 recompile_function(F) :-
     %Source records preserve order even when clauses move between arities.
     findall(Ref-Term, ( Term = [=, [F|_], _], translated_from(Ref, Term),
-                       clause(H, _, Ref), functor(H, F, A), user_dynamic_head(F, A, H) ), Pairs),
+                       clause(_, _, Ref) ), Pairs),
     findall(A, equation_arity(F, A, _), OldArities),
     maplist(recompile_equation, Pairs, Compiled),
     forall(member(Ref-_, Pairs), ( erase(Ref), forget_translation(Ref) )),
@@ -199,6 +204,7 @@ recompile_function(F) :-
     sync_function_arities(F), notify_translation_change(F).
 
 notify_translation_change(F) :-
+    type_publish(F),
     forall(metta_on_function_changed(F), true).
 
 recompile_equation(_-Term, compiled(Term, Clause, Uses)) :- compile_equation(Term, Clause, Uses).
@@ -222,12 +228,12 @@ goals_list_to_conj([], true)      :- !.
 goals_list_to_conj([G], G)        :- !.
 goals_list_to_conj([G|Gs], (G,R)) :- goals_list_to_conj(Gs, R).
 
+% Indexed contract clauses are installed only for declared native or memo calls.
+:- dynamic resolve_memoization/4.
 resolve_memoization(Fun, Args, Out, Goal) :-
     ( metta_memoized_dispatch_call(Fun, Args, Out, Goal)
     -> true
-    ; append(Args, [Out], DirectArgs),
-      Goal =.. [Fun|DirectArgs]
-    ).
+    ; append(Args, [Out], DirectArgs), Goal =.. [Fun|DirectArgs] ).
 incomplete_application_kind(Fun, Arity, partial) :- ( arity(Fun, KnownArity), KnownArity >= Arity
                                                      ; \+ arity(Fun, _) ), !.
 incomplete_application_kind(_, _, overapplied).
@@ -500,37 +506,22 @@ translate_expr([H0|T0], Goals, Out) :-
                                                       ; Out = ['Error', Exception])),
           append(Inner, [Goal], Goals)
         %--- Automatic 'smart' dispatch, translator deciding when to create a predicate call, data list, or dynamic dispatch: ---
-        ; translate_args(T, GsT, AVs),
-          append(GsH, GsT, Inner),
-          %Known function => direct call:
-          ( is_list(AVs), 
-            ( atom(HV), fun(HV), Fun = HV, AllAVs = AVs, IsPartial = false
-            ; compound(HV), HV = partial(Fun, Bound), append(Bound,AVs,AllAVs), IsPartial = true
-            ) % Check for type definition [:,HV,TypeChain]
-            -> length(AllAVs, CallN), note_translation_use(Fun, call(CallN)),
-               findall(TypeChain, catch(match('&self', [':', Fun, TypeChain], TypeChain, TypeChain), _, fail), TypeChains),
-               list_to_set(TypeChains, DeclaredChains),
-               exclude(type_chain_too_short(CallN), DeclaredChains, UniqueTypeChains),
-               ( UniqueTypeChains \= []
-                 -> length(AllAVs, InputArity),
-                    Arity is InputArity + 1,
-                    ( incomplete_application_kind(Fun, Arity, ApplicationKind), ApplicationKind == overapplied
-                      -> append(GsH, [throw_function_overapplication(Fun, InputArity)], Goals)
-                       ; maplist({Fun,TypeChains,T,GsH,IsPartial,Bound,Out}/[TypeChain,BranchGoal]>>(
-                                 typed_functioncall_branch(Fun, TypeChains, TypeChain, T, GsH, IsPartial, Bound, Out, BranchGoal)), UniqueTypeChains, Branches),
-                         disj_list(Branches, Disj),
-                         Goals = [Disj] )
-              ; build_call_or_partial(Fun, AllAVs, Out, Inner, [], Goals))
-          %Literals (numbers, strings, etc.), known non-function atom => data:
-          ; ( atomic(HV), \+ atom(HV) ; atom(HV), \+ fun(HV) ) -> note_translation_use(HV, data),
-                                                                  Out = [HV|AVs],
-                                                                  Goals = Inner
-          %Plain data list: evaluate inner fun-sublists
-          ; is_list(HV) -> eval_data_term(HV, Gd, HV1),
-                           append(Inner, Gd, Goals),
-                           Out = [HV1|AVs]
-          %Unknown head (var/compound) => runtime dispatch:
-          ; append(Inner, [reduce([HV|AVs], Out)], Goals) )).
+        ; ( atom(HV), fun(HV) -> Known=true, Fun=HV, Bound=[], Offset=0
+          ; nonvar(HV), HV=partial(Fun,Bound) -> Known=true, length(Bound,Offset)
+          ; Known=false, Fun='$unknown', Bound=[], Offset=0 ),
+          length(T, Supplied), Total is Offset+Supplied,
+          ( Known == true -> type_translate_args(Fun,Total,Offset,T,GsT,AVs)
+          ; type_raw_calls -> type_plans(T,Plans,GsT,AVs)
+          ; translate_args(T,GsT,AVs) ),
+          append(GsH,GsT,Inner),
+          ( Known == true -> append(Bound,AVs,All),
+               note_translation_use(Fun,call(Total)), build_call_or_partial(Fun,All,Out,Inner,[],Goals)
+          ; ( atomic(HV), \+ atom(HV) ; atom(HV), \+ fun(HV) ) -> note_translation_use(HV,data),
+               Out=[HV|AVs], Goals=Inner
+          ; is_list(HV) -> eval_data_term(HV,Gd,HV1),append(Inner,Gd,Goals),Out=[HV1|AVs]
+          ; note_translation_use('$argument_modes',modes),
+            ( type_raw_calls, type_plans_needed(Plans) -> append(GsH,[type_indirect(HV,Plans,Out)],Goals)
+            ; append(Inner,[reduce([HV|AVs],Out)],Goals) ) )).
 
 %Generate actual function call or partial if arity not complete:
 build_call_or_partial(Fun, AVs, Out, Inner, Extra, Goals) :- length(AVs, N),
@@ -544,43 +535,11 @@ build_call_or_partial(Fun, AVs, Out, Inner, Extra, Goals) :- length(AVs, N),
                                                                 ; append(Inner, [throw_function_overapplication(Fun, N)], Goals)
                                                              ).
 
-%A declaration with fewer inputs than the call has arguments does not describe that call:
-type_chain_too_short(N, TypeChain) :- is_list(TypeChain), TypeChain = [Arrow|Xs], Arrow == (->),
-                                      length(Xs, L), L =< N.
-
-%Type function call generation, returns function call plus typechecks for input and output:
-typed_functioncall_branch(Fun, TypeChains, TypeChain, T, GsH, IsPartial, Bound, Out, BranchGoal) :-
-    TypeChain = [->|Xs],
-    append(ArgTypes, [OutType], Xs),
-    % A closure does not store an overload choice or type-variable assignment.
-    % Only one fixed signature lets us reuse its captured argument checks.
-    ( ground(TypeChain), forall(member(Declared, TypeChains), Declared == TypeChain)
-      -> Fixed = true ; Fixed = false ),
-    ( IsPartial, Fixed == true
-      -> same_length(Bound, CapturedTypes), append(CapturedTypes, CallTypes, ArgTypes)
-       ; CallTypes = ArgTypes ),
-    translate_args_by_type(T, CallTypes, GsT2, AVsTmp0),
-    ( IsPartial -> append(Bound, AVsTmp0, AVsTmp) ; AVsTmp = AVsTmp0 ),
-    append(GsH, GsT2, InnerTmp),
-    % A fixed result check belongs to the complete call, not its closure.
-    ( Fixed == true, length([_|AVsTmp], CallArity), \+ arity(Fun, CallArity)
-       -> Extra = []
-    ; (OutType == '%Undefined%' ; OutType == '_' ; OutType == 'Atom')
-       -> Extra = [] ; Extra = [('get-type'(Out, OutType) *-> true ; 'get-metatype'(Out, OutType))] ),
-    build_call_or_partial(Fun, AVsTmp, Out, InnerTmp, Extra, GoalsList),
-    goals_list_to_conj(GoalsList, BranchGoal).
-
-
-%Selectively apply translate_args for non-Expression args while Expression args stay as data input:
+% Translator extensions retain their Atom argument convention.
 translate_args_by_type([], _, [], []) :- !.
-translate_args_by_type([A|As], [T|Ts], GsOut, [AV|AVs]) :-
-                      ( T == 'Atom' -> AV = A, GsA = []
-                                           ; translate_expr(A, GsA1, AV),
-                                             ( (T == '%Undefined%' ; T == '_')
-                                               -> GsA = GsA1
-                                                ; append(GsA1, [('get-type'(AV, T) *-> true ; 'get-metatype'(AV, T))], GsA))),
-                                             translate_args_by_type(As, Ts, GsRest, AVs),
-                                             append(GsA, GsRest, GsOut).
+translate_args_by_type([X|Xs], [T|Ts], Goals, [V|Vs]) :-
+    (T == 'Atom' -> V=X, Here=[]; translate_expr(X,Here,V)),
+    translate_args_by_type(Xs,Ts,Rest,Vs),append(Here,Rest,Goals).
 
 %Handle data list:
 eval_data_term(X, [], X) :- (var(X); atomic(X)), !.
@@ -658,14 +617,9 @@ next_lambda_name(Name) :- flag(lambda_counter, Prev, Prev + 1),
                             ; Name = Candidate ).
 
 % Select a declaration by name and source arity without binding wildcard rows.
-declared_output_type(F, Arity, OutType) :-
-    atom(F), nonvar(OutType), current_predicate('&self'/3),
-    clause('&self'(':', F, _), true, Ref),
-    % The indexed lookup may bind a wildcard; inspect the original row by ref.
-    clause('&self'(Colon, Target, Type), true, Ref),
-    Colon == (:), Target == F, is_list(Type), Type = [Arrow|Types], Arrow == (->),
-    TypeCount is Arity + 1, length(Types, TypeCount),
-    last(Types, DeclaredOut), DeclaredOut == OutType.
+declared_output_type(F,Arity,OutType) :- atom(F),nonvar(OutType),
+    findall(R,(type_source_schema(F,Arity,Ts),last(Ts,R)),Returns),Returns\==[],
+    forall(member(R,Returns),R==OutType).
 
 %The key of a case with an Empty case runs once, and Empty only if the key yields no value. Soft-cut does exactly
 %this, but would make a cut inside the key local to it; so a key containing a cut instead records in a fresh

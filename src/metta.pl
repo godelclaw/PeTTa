@@ -36,8 +36,8 @@ library_source_exists(Path) :- file_name_extension(Path, metta, MettaPath),
 :- use_module(library(process)).
 :- use_module(library(filesex)).
 :- current_prolog_flag(argv, Argv),
-  ( member(mork, Argv) -> ensure_loaded([ext_points, parser, translator, filereader, '../mork_ffi/morkspaces', spaces])
-                        ; ensure_loaded([ext_points, parser, translator, filereader, spaces])).
+  ( member(mork, Argv) -> ensure_loaded([ext_points, parser, translator, filereader, '../mork_ffi/morkspaces', spaces, types, type_membership])
+                        ; ensure_loaded([ext_points, parser, translator, filereader, spaces, types, type_membership])).
 
 %%%%%%%%%% Standard Library for MeTTa %%%%%%%%%%
 
@@ -266,11 +266,13 @@ get_type_candidate(X, T) :- match('&self', [':',X,T], T, _).
 'readln!'(Out) :- read_line_to_string(user_input, Str),
                   sread(Str, Out).
 
-test(A,B,true) :- (A =@= B -> E = '✅' ; E = '❌'),
+test(A,B,true) :- (A =@= B -> Same=true
+                  ; copy_term_nat(A-B,PlainA-PlainB), (PlainA =@= PlainB -> Same=true;Same=false)),
+                  (Same==true -> E='✅';E='❌'),
                   swrite(A, RA),
                   swrite(B, RB),
                   format("is ~w, should ~w. ~w ~n", [RA, RB, E]),
-                  (A =@= B -> true ; halt(1)).
+                  (Same==true -> true ; halt(1)).
 
 assert(Goal, true) :- ( call(Goal) -> true
                                     ; swrite(Goal, RG),
@@ -426,16 +428,18 @@ importer_helper(Space, File) :-
          import_once(Space, CanonPath, load_metta_file(CanonPath, _, Space)) ).
 
 :- dynamic translator_rule/1.
-'add-translator-rule!'(HV, true) :- ( translator_rule(HV)
-                                      -> true ; assertz(translator_rule(HV)) ).
+'add-translator-rule!'(HV, true) :- with_mutex(petta_definitions,transaction((
+    (translator_rule(HV)->true;assertz(translator_rule(HV))),recompile_function(HV)))).
 
-'remove-translator-rule!'(HV, true) :- retractall(translator_rule(HV)).
+'remove-translator-rule!'(HV, true) :- with_mutex(petta_definitions,transaction((
+    retractall(translator_rule(HV)),recompile_function(HV)))).
 
 %%% Registration: %%%
 :- dynamic fun/1, arity/2.
 %Arities are registered in ascending order: the order current_predicate/1
 %enumerates them in depends on how many atoms the process created before.
-register_fun(N) :- ( fun(N) -> Existing = true ; Existing = false, assertz(fun(N)) ),
+register_fun(N) :- with_mutex(petta_definitions,transaction((register_fun_locked(N)))).
+register_fun_locked(N) :- type_public_name(N), ( fun(N) -> Existing = true ; Existing = false, assertz(fun(N)) ),
                    findall(Arity, native_predicate_arity(N, Arity), Arities0),
                    sort(Arities0, Arities),
                    ( (Existing == false ; Arities \= []), \+ native_function(N)
@@ -443,12 +447,12 @@ register_fun(N) :- ( fun(N) -> Existing = true ; Existing = false, assertz(fun(N
                    forall(member(Arity, Arities),
                           ( (retract(no_equations_clause(N, Arity, R)) -> erase(R) ; true),
                             (native_arity(N, Arity) -> true ; assertz(native_arity(N, Arity))),
-                            (arity(N, Arity) -> true ; assertz(arity(N, Arity))) )).
+                            (arity(N, Arity) -> true ; assertz(arity(N, Arity))) )), type_publish(N).
 
 native_predicate_arity(F, A) :- current_predicate(F/A), \+ (current_op(_, _, F), A =< 2),
     functor(H, F, A),
     ( user_dynamic_head(F, A, H)
-      -> once((clause(H, _, R), \+ translated_from(R, _), \+ no_equations_clause(F, A, R)))
+      -> once((clause(H, _, R), \+ translated_from(R, _), \+ type_wrapper(F,A,R), \+ no_equations_clause(F, A, R)))
     ; predicate_property(H, foreign)
     ; predicate_property(H, number_of_clauses(K)), K > 0 ).
 :- maplist(register_fun, [superpose, empty, let, 'let*', '+','-','*','/', '%', min, max, 'change-state!', 'get-state', 'bind!',

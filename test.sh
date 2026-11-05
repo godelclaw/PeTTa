@@ -2,6 +2,7 @@
 
 swipl -q -s tests/test_parser_swrite.pl -g run_tests -t halt || exit 1
 swipl -q -s tests/test_definition_order.pl -g run_tests -t halt -- --silent || exit 1
+swipl -q -s tests/test_runtime_types.pl -g run_tests -t halt -- --silent || exit 1
 
 run_test() {
     f="$1"
