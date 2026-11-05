@@ -23,12 +23,13 @@ attr_unify_hook(state(Cell,Watching),Value) :-
        (get_attr(Value,type_obligations,state(Other,Before)) -> Cell=Other,merge(Watching,Before,Next)
        ;Next=Watching),put_attr(Value,type_obligations,state(Cell,Next))
     ;(member(watch(Frame,_),Watching),arg(1,Frame,Options),Options\==[] ->
-        acyclic_term(Value),user:type_capture(Value,Evidence),Cell=Evidence,maplist(notify(Value,Evidence),Watching)
+        acyclic_term(Value),user:type_capture(Value,Evidence),Cell=Evidence,
+        term_variables(Value,Vars),maplist(notify(Vars),Watching)
      ;true) ).
-notify(_,_,watch(Frame,_)) :- arg(1,Frame,[]),!.
-notify(_,Evidence,watch(Frame,Kind)) :-
+notify(_,watch(Frame,_)) :- arg(1,Frame,[]),!.
+notify(Vars,watch(Frame,Kind)) :-
     (Kind==passive,arg(2,Frame,input)->true;user:type_validate(Frame)),
-    user:type_arm_evidence(Frame,Evidence,Kind).
+    maplist(user:type_watch_value(Frame,Kind),Vars).
 
 merge([],Rest,Rest).
 merge([Watch|Watches],Before,Next) :-

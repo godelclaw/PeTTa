@@ -200,6 +200,22 @@ test(copy_term_preserves_shared_polymorphic_constraints) :-
 test(variable_aliasing_merges_obligation_cells) :-
     program("(: rt_alias (-> $a $a Number)) (= (rt_alias $x $y) 7)",_),
     user:rt_alias(X,Y,7),X=Y,X=42.
+test(discharging_a_frame_keeps_other_shared_and_copied_checks) :-
+    program("(: rt_review_joint (-> $a $a Number)) (= (rt_review_joint $x $y) 7)
+      (: rt_review_id (-> $a $a)) (= (rt_review_id $x) $x)",_),
+    user:rt_review_joint(X,1,7),user:rt_review_id(X,X),
+    user:rt_review_joint(Y,"s",7),copy_term(X-Y,A-B),A=B,
+    assertion(\+ A=1),assertion(\+ A="s"),
+    assertion(\+ X="s"),X=1,Y="ok".
+test(a_later_witness_or_overload_accepts_the_result_once) :-
+    program("(: rt_review_a rt_review_A) (: rt_review_a rt_review_B) (: rt_review_b rt_review_B)
+      (: rt_review_pick (-> $a $a)) (= (rt_review_pick $x) rt_review_b)
+      (: rt_review_over (-> $a $a)) (: rt_review_over (-> Number String))
+      (= (rt_review_over $x) (let $n (get-state rt_review_count)
+         (let $_ (change-state! rt_review_count (+ $n 1)) \"ok\")))
+      !(change-state! rt_review_count 0) !(collapse (rt_review_pick rt_review_a))
+      !(collapse (rt_review_over 1)) !(get-state rt_review_count)",R),
+    assertion(R == [true,[rt_review_b],["ok"],1]).
 test(explicit_residual_goal_copy_replays_the_same_constraint) :-
     user:rt_copy_group(X,"ok",X),copy_term(X,C,Goals),
     maplist(call,Goals),assertion(\+(C=2)),C="ok".
