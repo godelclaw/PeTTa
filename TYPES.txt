@@ -72,6 +72,14 @@ to the ordinary type name Atom gains no holding power. Within constructor
 fields, mode words are ordinary value-type names. Arrow interface descriptions
 retain their slot annotations.
 
+A check that only requires a value to have some type checks nothing, because
+every finite value has a canonical type: a primitive, Symbol or declared
+nominal type, a structural tuple, or an Opaque descriptor. So a parameter that
+occurs once in a signature, a wildcard slot, and a result identical to an input
+under a shared parameter impose no check and leave no watcher. Values are finite
+terms. Checks that inspect structure test acyclicity before walking a value;
+the others do not police it.
+
 Callable arities use the translator's existing currying rules. Result arrows and
 result parameters project to the extra arguments introduced by eta expansion.
 A specified nonfunction result keeps the declared source arity, so a closure is
@@ -113,7 +121,7 @@ input to the result. The assignment remains undecided until the result supplies
 enough information. This keeps the evidence across ordinary backtracking,
 collection, transaction rollback, and edits by another thread, without mutation
 notifications or a list of active frames. An identical input/result value under
-unchanged declarations can reuse this evidence with only a finiteness check.
+unchanged declarations reuses this evidence and needs no further check.
 
 An identical input/result check can be reused only when the relevant native
 database generations are unchanged. These integers test a reuse premise; they
@@ -128,7 +136,7 @@ One variable has one shared evidence cell and a list of affected contracts.
 Binding it records its new evidence once, then checks those contracts. Private
 cells are attributed too, preserving their identity through native copying.
 Completed vacuous contracts release their input records and remove their variable
-watchers; finiteness checks remain. A kind-only attribute on a private type
+watchers. A kind-only attribute on a private type
 parameter does not prevent release. Other constraints and pattern links do.
 
 collapse is ordinary findall. Visible residual constraints copy with variables;

@@ -78,7 +78,7 @@ type_output_options([],_,_,[],[]).
 type_output_options([option(Mode,Type,Before)|Options],Value,Stable,Next,Fresh) :-
     ( Mode=mode(M) -> (type_observe(M,Value)->After=yes,Keep=true;Keep=false)
     ; Stable==true,type_same_input(Before,Type,Value)
-      -> type_alias_input(Before,Type,Value,Aliased),After=finite(Value),Keep=true
+      -> type_alias_input(Before,Type,Value,Aliased),After=yes,Keep=true
     ; type_formula(Value,Type,After),Keep=true ),
     (var(Aliased)->Aliased=Before;true),
     (Keep==true -> Next=[option(done,Type,both(Aliased,After))|Rest],Fresh=[After|More];Next=Rest,Fresh=More),
@@ -94,7 +94,7 @@ type_stamp(stamp(D,F,A,E)) :-
 type_same_input(has(E,U),T,V) :- U==T,arg(1,E,Value),Value==V.
 type_same_input(passive(F),T,V) :- type_same_input(F,T,V).
 type_same_input(both(A,B),T,V) :- (type_same_input(A,T,V);type_same_input(B,T,V)).
-type_alias_input(passive(F),T,V,finite(V)) :- type_same_input(F,T,V),!.
+type_alias_input(passive(F),T,V,yes) :- type_same_input(F,T,V),!.
 type_alias_input(both(A,B),T,V,both(C,D)) :- !,type_alias_input(A,T,V,C),type_alias_input(B,T,V,D).
 type_alias_input(F,_,_,F).
 
@@ -104,7 +104,6 @@ type_validate(Frame) :- arg(1,Frame,Options),
     (Options==[] -> true;arg(2,Frame,Stage), \+ \+ (member(option(_,T,F),Options),(T=='$any'(true)->true;type_kind(T)),type_satisfies(F,Stage))).
 type_arm(Frame,passive(has(E,_))) :- !,type_arm_evidence(Frame,E,passive).
 type_arm(Frame,has(E,_)) :- !,type_arm_evidence(Frame,E,active).
-type_arm(_,finite(V)) :- !,type_finite(V).
 type_arm(Frame,both(A,B)) :- !,type_arm(Frame,A),type_arm(Frame,B).
 type_arm(_,_).
 % Native traversal visits each open value variable once, including repeated
@@ -113,7 +112,6 @@ type_arm_evidence(Frame,E,Kind) :- arg(1,E,Value),term_variables(Value,Vars),
     maplist(type_watch_value(Frame,Kind),Vars).
 type_watch_value(Frame,Kind,V) :- type_obligations:watch(V,_,Frame,Kind).
 type_satisfies(yes,_).
-type_satisfies(finite(V),_) :- acyclic_term(V).
 type_satisfies(passive(_),input) :- !.
 type_satisfies(passive(F),Stage) :- type_satisfies(F,Stage).
 type_satisfies(both(A,B),Stage) :- type_satisfies(A,Stage),type_satisfies(B,Stage).
@@ -122,7 +120,7 @@ type_satisfies(has(E,T),_) :- type_evidence_has(E,T,_,[]).
 type_input_formulas([],[],_,_,yes).
 type_input_formulas([V|Vs],[T|Ts],Out,All,both(Here,Rest)) :-
     (var(T),occurrences_of_var(T,All,1) ->
-       (occurrences_of_var(T,Out,0)->Here=finite(V);type_formula(V,T,F),Here=passive(F))
+       (occurrences_of_var(T,Out,0)->Here=yes;type_formula(V,T,F),Here=passive(F))
     ;type_formula(V,T,Here)),type_input_formulas(Vs,Ts,Out,All,Rest).
 type_formula(_,T,yes) :- T=='$any'(true),!.
 type_formula(V,T,F) :- ground(V),ground(T),!,
@@ -258,7 +256,7 @@ type_evidence_list(cons(_,_,_,H,T),E,P,R) :-
     type_evidence_has(H,E,P,Q),type_evidence_list(T,E,Q,R).
 
 % Once all residual type parameters are independent, they constrain no future
-% finite values. Release the completed frame; its leaf callbacks check finiteness.
+% values. Release the completed frame.
 type_discharge(Frame) :- arg(1,Frame,Options),
     ( \+ \+ (member(option(_,_,Form),Options),type_residual(Form,Pending,[]),
                  is_list(Pending),type_independent(Pending))
@@ -266,7 +264,6 @@ type_discharge(Frame) :- arg(1,Frame,Options),
          maplist(type_obligations:release(Frame),Vars)
     ;true ).
 type_residual(yes,P,P).
-type_residual(finite(_),P,P).
 type_residual(passive(F),P,R) :- type_residual(F,P,R).
 type_residual(both(A,B),P,R) :- type_residual(A,P,Q),type_residual(B,Q,R).
 type_residual(has(E,T),P,R) :- type_evidence_has(E,T,P,R).
@@ -277,7 +274,7 @@ type_independent(Pending) :- type_requests(Pending,Needs,Patterns,Values),
         forall(member(need(W,U),Needs),(U==T -> W==V;true)))),
     subsumes_term(Patterns,Values),term_variables(Patterns,Vars),
     forall(member(X,Vars),(\+ attvar(X),\+ (member(need(_,U),Needs),U==X))).
-% Well-formedness alone does not restrict a free parameter's finite values.
+% Well-formedness alone does not restrict a free parameter's values.
 % Other type attributes and pattern variables must remain constrained.
 type_free_parameter(T) :- var(T),
     (get_attrs(T,Attrs)->Attrs=att(freeze,Goals,[]),type_kind_goals(Goals,T);true).
@@ -286,14 +283,12 @@ type_kind_goals(user:type_kind(U),T) :- U==T.
 type_requests([],[],[],[]).
 type_requests([need(V,T)|Rest],[need(V,T)|Needs],Ps,Vs) :- type_requests(Rest,Needs,Ps,Vs).
 type_requests([pattern(P,V)|Rest],Needs,[P|Ps],[V|Vs]) :- type_requests(Rest,Needs,Ps,Vs).
-type_watch_finite(V) :- type_freeze(V,type_finite(V)).
 % An open value passed through many boundaries keeps one copy of each test;
 % freeze/2 joins the goals in its attribute with '$and'/2.
 type_freeze(V,Test) :- get_attr(V,freeze,Frozen),type_frozen(Frozen,user:Test),!.
 type_freeze(V,Test) :- freeze(V,Test).
 type_frozen('$and'(A,B),Test) :- !,(type_frozen(A,Test);type_frozen(B,Test)).
 type_frozen(Goal,Test) :- Goal==Test.
-type_finite(V) :- acyclic_term(V),term_variables(V,Vars),maplist(type_watch_finite,Vars).
 
 % Source clauses retain their existing ownership and logical arity records.
 type_store_clause(Term, (Head :- Body), (Stored :- Worker)) :-
@@ -328,11 +323,8 @@ type_tail_rewrite(G,_,_,_,_,G).
 type_tail_target(_,W,_,Tail) :- type_tail_entry(W,Tail),!.
 type_tail_target(A,W,Schema,Tail) :- atom_concat('$tail$',W,Tail),
     N is A-1,length(Values,N),append(Values,[_Out],All),Head=..[Tail|All],Call=..[W|All],
-    append(Inputs,[Result],Schema),maplist(type_inline_slot(Schema),Inputs,Values,Checks),
-    (type_proper_slots(Inputs)->Before=Checks
-    ;maplist(type_inline,Inputs,Values,_),type_inline(Result,_,_)->Before=Checks
-    ;Before=[acyclic_term(Values)|Checks]),
-    append(Before,[Call],Goals),
+    append(Inputs,[_],Schema),maplist(type_inline_slot(Schema),Inputs,Values,Checks),
+    append(Checks,[Call],Goals),
     exclude(==(true),Goals,Needed),goals_list_to_conj(Needed,Body),
     assertz((Head:-Body)),assertz(type_tail_entry(W,Tail)).
 type_worker_name(F, A, W) :- type_worker(F,A,W), !.
@@ -371,11 +363,10 @@ type_contract_body(Args,Out,Raw,[Schema],Call,Body) :- Raw=Out,append(Inputs,[Re
 type_contract_body(Args,Out,Raw,[Schema],Call,Body) :- !,Raw=Out,append(Inputs,[Result],Schema),
     type_split_slots(Schema,Inputs,Args,Before,Types,Values),
     (type_inline_slot(Schema,Result,Out,After)->Last='_';Last=Result,After=true),
-    (Types==[],Last=='_' -> Enter=[],Exit=[],(type_proper_slots([Result])->Finite=[];Finite=[acyclic_term(Out)])
+    (Types==[],Last=='_' -> Enter=[],Exit=[]
     ;append(Types,[Last],Reduced),type_prime_schema(Reduced),
-     Enter=[types_enter([Reduced],Values,Frame)],Exit=[types_exit(Frame,Out)],Finite=[]),
-    (type_proper_slots(Inputs)->Prefix=[];Prefix=[acyclic_term(Args)]),
-    append([Prefix,Before,Enter,[Call],Exit,[After|Finite]],Goals),
+     Enter=[types_enter([Reduced],Values,Frame)],Exit=[types_exit(Frame,Out)]),
+    append([Before,Enter,[Call],Exit,[After]],Goals),
     exclude(==(true),Goals,Needed),goals_list_to_conj(Needed,Body).
 type_contract_body(Args,Out,Raw,Schemas,Call,(types_enter(Schemas,Args,Frame),Call,types_exit(Frame,Out))) :-
     Raw=Out,maplist(type_prime_schema,Schemas).
@@ -384,9 +375,8 @@ type_split_slots(Schema,[T|Ts],[V|Vs],Before,Types,Values) :-
     (type_inline_slot(Schema,T,V,Here)->Before=[Here|More],Types=Rest,Values=Tail
     ;Before=More,Types=[T|Rest],Values=[V|Tail]),
     type_split_slots(Schema,Ts,Vs,More,Rest,Tail).
-type_inline_slot(Schema,T,V,Goal) :- var(T),!,occurrences_of_var(T,Schema,1),Goal=type_finite(V).
+type_inline_slot(Schema,T,_,true) :- var(T),!,occurrences_of_var(T,Schema,1).
 type_inline_slot(_,T,V,Goal) :- (type_inline(T,V,Goal)->true;type_mode(T),Goal=type_observe(T,V)).
-type_proper_slots(Ts) :- forall(member(T,Ts),(\+type_mode(T),T\=='_',T\=='%Undefined%')).
 type_inline(T,V,Goal) :-
     ( T == 'Number' -> Test=number(V); T == 'String' -> Test=string(V)
     ; T == 'Bool' -> Test=(V==true->true;V==false) ), !,

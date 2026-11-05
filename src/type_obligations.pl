@@ -16,10 +16,9 @@ attr_unify_hook(state(Cell,Watching),Value) :-
     (var(Value) ->
        (get_attr(Value,type_obligations,state(Other,Before)) -> Cell=Other,merge(Watching,Before,Next)
        ;Next=Watching),put_attr(Value,type_obligations,state(Cell,Next))
-    ;acyclic_term(Value),
-     (member(watch(Frame,_),Watching),arg(1,Frame,Options),Options\==[] ->
-        user:type_capture(Value,Evidence),Cell=Evidence,maplist(notify(Value,Evidence),Watching)
-     ;user:type_finite(Value)) ).
+    ;(member(watch(Frame,_),Watching),arg(1,Frame,Options),Options\==[] ->
+        acyclic_term(Value),user:type_capture(Value,Evidence),Cell=Evidence,maplist(notify(Value,Evidence),Watching)
+     ;true) ).
 notify(_,_,watch(Frame,_)) :- arg(1,Frame,[]),!.
 notify(_,Evidence,watch(Frame,Kind)) :-
     (Kind==passive,arg(2,Frame,input)->true;user:type_validate(Frame)),
@@ -32,13 +31,13 @@ merge([Watch|Watches],Before,Next) :-
 
 same_watch(watch(F,K),watch(G,L)) :- K==L,arg(3,F,I),arg(3,G,J),I==J.
 
-% A discharged frame imposes only finiteness. Remove both kinds of watcher;
+% A discharged frame imposes nothing further. Remove both kinds of watcher;
 % other frames and foreign attributes on the variable remain untouched.
 release(Frame,V) :-
     (get_attr(V,type_obligations,state(Cell,Before)) ->
        exclude(frame_watch(Frame),Before,Rest),
        (Rest==[]->del_attr(V,type_obligations);put_attr(V,type_obligations,state(Cell,Rest)))
-    ;true),user:type_watch_finite(V).
+    ;true).
 frame_watch(Frame,watch(Other,_)) :- arg(3,Frame,I),arg(3,Other,J),I==J.
 
 restore(V,Cell,Watching) :- mark(Cell),

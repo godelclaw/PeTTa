@@ -143,9 +143,17 @@ test(declaration_updates_roll_back_with_the_transaction) :-
 test(space_enumeration_keeps_native_assertion_behavior) :-
     program("(: rt_row (-> Number Number)) (= (rt_row $x) $x) !(let $x (rt_row $y) (add-atom &rt_rows (row $x))) !(collapse (let (row $x) (get-atoms &rt_rows) (let $x \"bad\" 1)))",R),
     assertion(R == [true,[1]]).
-test(late_cycles_fail_after_a_polymorphic_identity) :-
+test(a_polymorphic_identity_leaves_no_watcher) :-
     program("(: rt_poly_id (-> $a $a)) (= (rt_poly_id $x) $x)",_),
-    user:rt_poly_id(X,Y),assertion(X==Y),assertion(\+ (X=[X])).
+    user:rt_poly_id(X,Y),assertion(X==Y),assertion(\+ attvar(X)).
+% A slot whose only requirement is that its value has some type checks nothing.
+test(unshared_and_wildcard_slots_check_nothing) :-
+    program("(: rt_unshared (-> $a Number Number)) (= (rt_unshared $x $n) $n)
+      (: rt_wild (-> _ Number Number)) (= (rt_wild $x $n) $n)",_),
+    user:rt_unshared(X,1,R1),assertion(R1==1),assertion(\+ attvar(X)),
+    user:rt_wild(Y,1,R2),assertion(R2==1),assertion(\+ attvar(Y)),
+    Cyclic=f(Cyclic),user:rt_unshared(Cyclic,2,R3),assertion(R3==2),
+    assertion(\+ user:rt_unshared(_,"bad",_)),assertion(\+ user:rt_wild(_,"bad",_)).
 test(duplicate_signatures_do_not_repeat_effects) :-
     program("(: rt_effect (-> Number Number)) (: rt_effect (-> $a Number)) (= (rt_effect $x) (let $n (get-state rt_effects) (let $_ (change-state! rt_effects (+ $n 1)) 7))) !(change-state! rt_effects 0) !(rt_effect 1) !(get-state rt_effects)",R),
     assertion(R == [true,7,1]).
@@ -346,7 +354,7 @@ test(edit_inside_collection_keeps_input_evidence) :-
 test(vacuous_open_tuple_releases_its_frame) :-
     program("(: ri_wrap (-> $a ($a))) (= (ri_wrap $x) ($x))",_),
     user:ri_wrap(X,[_]),assertion(\+get_attr(X,type_obligations,_)),
-    assertion(\+(X=[X])),X=7.
+    assertion(\+ attvar(X)),X=7.
 test(tail_call_observes_a_tightened_input_contract) :-
     program("(: ri_tight (-> Number Number)) (= (ri_tight $n) (if (== $n 0) 7 (let $_ (remove-atom &self (: ri_tight (-> Number Number))) (let $_ (add-atom &self (: ri_tight (-> String Number))) (ri_tight 0))))) !(collapse (ri_tight 1))",R),
     assertion(R == [[]]).
@@ -365,7 +373,7 @@ test(tail_call_observes_retired_eta_signature) :-
 
 test(repeated_vacuous_calls_leave_no_frame_watchers) :-
     numlist(1,1000,Ns),maplist(user:runtime_wrap_once(X),Ns),
-    assertion(\+get_attr(X,type_obligations,_)),assertion(\+(X=[X])),X=7.
+    assertion(\+get_attr(X,type_obligations,_)),assertion(\+ attvar(X)),X=7.
 test(input_evidence_survives_another_threads_definition_edit) :-
     program("(: ri_thread_g (-> Number Number)) (: ri_thread_h (-> Number Number)) (: ri_thread_keep (-> $a $a))",_),
     setup_call_cleanup(message_queue_create(Events),
