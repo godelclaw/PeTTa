@@ -1,3 +1,4 @@
+:- set_test_options([load(always)]).
 :- begin_tests(parser_swrite).
 
 :- ensure_loaded('../src/parser.pl').
