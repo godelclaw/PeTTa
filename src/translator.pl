@@ -509,7 +509,8 @@ translate_expr([H0|T0], Goals, Out) :-
             ) % Check for type definition [:,HV,TypeChain]
             -> length(AllAVs, CallN), note_translation_use(Fun, call(CallN)),
                findall(TypeChain, catch(match('&self', [':', Fun, TypeChain], TypeChain, TypeChain), _, fail), TypeChains),
-               list_to_set(TypeChains, UniqueTypeChains),
+               list_to_set(TypeChains, DeclaredChains),
+               exclude(type_chain_too_short(CallN), DeclaredChains, UniqueTypeChains),
                ( UniqueTypeChains \= []
                  -> length(AllAVs, InputArity),
                     Arity is InputArity + 1,
@@ -542,6 +543,10 @@ build_call_or_partial(Fun, AVs, Out, Inner, Extra, Goals) :- length(AVs, N),
                                                                   append(Inner, Extra, Goals)
                                                                 ; append(Inner, [throw_function_overapplication(Fun, N)], Goals)
                                                              ).
+
+%A declaration with fewer inputs than the call has arguments does not describe that call:
+type_chain_too_short(N, TypeChain) :- is_list(TypeChain), TypeChain = [Arrow|Xs], Arrow == (->),
+                                      length(Xs, L), L =< N.
 
 %Type function call generation, returns function call plus typechecks for input and output:
 typed_functioncall_branch(Fun, TypeChain, T, GsH, IsPartial, Bound, Out, BranchGoal) :-
