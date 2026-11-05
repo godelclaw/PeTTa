@@ -5,8 +5,14 @@
 cell(V,Cell) :-
     (get_attr(V,type_obligations,state(Stored,_)) -> Cell=Stored
     ;mark(Cell),put_attr(V,type_obligations,state(Cell,[]))).
-watch(V,Cell,Frame,Kind) :- cell(V,Cell),get_attr(V,type_obligations,state(Cell,Before)),
-    merge([watch(Frame,Kind)],Before,Next),put_attr(V,type_obligations,state(Cell,Next)).
+watch(V,Cell,Frame,Kind) :-
+    (get_attr(V,type_obligations,state(Cell,Before))->true;mark(Cell),Before=[]),
+    arg(3,Frame,Identity),
+    (has_watch(Before,Identity,Kind)->true
+    ;put_attr(V,type_obligations,state(Cell,[watch(Frame,Kind)|Before]))).
+has_watch([watch(Frame,Kind0)|_],Identity,Kind) :-
+    Kind0==Kind,arg(3,Frame,Other),Identity==Other,!.
+has_watch([_|Rest],Identity,Kind) :- has_watch(Rest,Identity,Kind).
 
 % Marking private cells preserves their sharing through native attribute copies.
 mark(Cell) :- (var(Cell)->put_attr(Cell,type_obligations,cell_marker);true).

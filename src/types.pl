@@ -73,7 +73,8 @@ types_exit(Frame, Value) :- acyclic_term(Value), arg(1,Frame,Options),
     arg(5,Frame,Inputs),setarg(5,Frame,[Value|Inputs]),
     arg(4,Frame,Before),type_stamp(Now),(Before==Now->Stable=true;Stable=false),
     type_output_options(Options,Value,Stable,Next,Fresh),Next\==[],setarg(1,Frame,Next),setarg(2,Frame,output),
-    type_validate(Frame),maplist(type_arm(Frame),Fresh),type_discharge(Frame).
+    type_validate(Frame),type_discharge(Frame),
+    (arg(1,Frame,[]) -> true;maplist(type_arm(Frame),Fresh)).
 type_output_options([],_,_,[],[]).
 type_output_options([option(Mode,Type,Before)|Options],Value,Stable,Next,Fresh) :-
     ( Mode=mode(M) -> (type_observe(M,Value)->After=yes,Keep=true;Keep=false)
