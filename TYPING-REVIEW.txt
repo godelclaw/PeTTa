@@ -112,17 +112,18 @@ serializing live constraint frames.
 Measured costs
 --------------
 
-Three interleaved repetitions, same declared workloads on both checkouts.
+Fifteen interleaved repetitions, same declared workloads on both checkouts.
 Microbenchmarks enter through compiled MeTTa calls, including stable's call-site
-checks. Complete examples include loading. Times are median CPU seconds.
+checks. Complete examples include loading. Times are median CPU seconds; the
+draft was faster in each of the 15 paired nilbc runs.
 
 Workload                         Stable inf.   Draft inf.    Stable s  Draft s
-10,000 typed scalar calls             90,005       60,005    0.00250  0.00219
-Typed counting, 200,000 steps      2,000,014    1,000,009    0.08719  0.01619
-Typed constructor walk, 400        1,851,823       83,012    0.15501  0.00409
-Typed open-variable loop              90,014       70,025    0.00355  0.00161
-he_minimalmetta                   24,199,749   20,844,814    0.77768  0.69029
-nilbc                             20,100,081   19,486,151    0.58230  0.53075
+10,000 typed scalar calls             90,005       60,005    0.00256  0.00228
+Typed counting, 200,000 steps      2,000,014    1,000,009    0.08774  0.01614
+Typed constructor walk, 400        1,851,823       83,012    0.15939  0.00407
+Typed open-variable loop              90,014       70,025    0.00359  0.00163
+he_minimalmetta                   24,199,749   20,844,814    0.75495  0.66238
+nilbc                             20,100,081   19,486,151    0.58260  0.53291
 
 nilbc declares (: bc (-> $a Nat $b $b)) and recurses on open proof queries. Its
 input evidence is retained, and an open input watched by an enclosing running
@@ -173,11 +174,12 @@ It is not the selected Atom-template convention of this draft.
 Validation
 ----------
 
-112 runtime tests, 49 definition-order tests and 10 parser tests pass normally
-and under -O. The example run passes 177 files / 786 assertions, with the standard interactive exclusions; the
-network import example was exercised successfully. The watcher controls cover independent
-constraints after discharge/copy, a later compatible witness/overload with one
-effect, and an inner call's input bound inside or after that call.
+113 runtime tests, 49 definition-order tests and 10 parser tests pass normally
+and under -O. The example run passes 177 files / 786 assertions, with the
+standard interactive exclusions; the network import example was exercised
+separately. The watcher controls cover independent constraints after
+discharge/copy, a later compatible witness/overload with one effect, and an
+inner call's input bound inside or after that call.
 Compiled and general membership, and contracts on ground values and on values
 bound later, agree on 1,650 audited type/value pairs, including Atom inside
 types, before and after declaration edits.
