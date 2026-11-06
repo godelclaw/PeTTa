@@ -111,19 +111,32 @@ type_redirect_worker(F,A,W) :-
 % Primitive monomorphic boundaries compile to native inline tests.
 type_entry_body(W,Args,Out,Schemas,Body) :-
     append(Args,[Raw],All),Call=..[W|All],type_contract_body(Args,Out,Raw,Schemas,Call,Body).
-type_contract_body(Args,Out,Raw,[Schema],Call,Body) :- Raw=Out,append(Inputs,[Result],Schema),
-    maplist(type_inline,Inputs,Args,Before),type_inline(Result,Raw,After),!,
-    append(Before,[Call,After],Goals),exclude(==(true),Goals,Needed),goals_list_to_conj(Needed,Body).
+type_contract_body(Args, Out, Raw, [Schema], Call, Body) :-
+    Raw = Out,
+    append(Inputs, [Result], Schema),
+    maplist(type_inline, Inputs, Args, Before),
+    type_inline(Result, Raw, After), !,
+    append(Before, [Call,After], Goals),
+    exclude(==(true), Goals, Needed),
+    goals_list_to_conj(Needed, Body).
 % A single signature's independent slots need no joint solver. Only shared
 % parameters and non-ground structured types remain in the residual frame.
-type_contract_body(Args,Out,Raw,[Schema],Call,Body) :- !,Raw=Out,append(Inputs,[Result],Schema),
-    type_split_slots(Schema,Inputs,Args,Before,Types,Values),
-    (type_inline_slot(Schema,Result,Out,After)->Last='_';Last=Result,After=true),
-    (Types==[],Last=='_' -> Enter=[],Exit=[]
-    ;append(Types,[Last],Reduced),type_prime_schema(Reduced),
-     Enter=[types_enter([Reduced],Values,Frame)],Exit=[types_exit(Frame,Out)]),
-    append([Before,Enter,[Call],Exit,[After]],Goals),
-    exclude(==(true),Goals,Needed),goals_list_to_conj(Needed,Body).
+type_contract_body(Args, Out, Raw, [Schema], Call, Body) :- !,
+    Raw = Out,
+    append(Inputs, [Result], Schema),
+    type_split_slots(Schema, Inputs, Args, Before, Types, Values),
+    ( type_inline_slot(Schema, Result, Out, After) -> Last = '_'
+    ; Last = Result, After = true
+    ),
+    ( Types == [], Last == '_' -> Enter = [], Exit = []
+    ; append(Types, [Last], Reduced),
+      type_prime_schema(Reduced),
+      Enter = [types_enter([Reduced], Values, Frame)],
+      Exit = [types_exit(Frame, Out)]
+    ),
+    append([Before,Enter,[Call],Exit,[After]], Goals),
+    exclude(==(true), Goals, Needed),
+    goals_list_to_conj(Needed, Body).
 type_contract_body(Args,Out,Raw,Schemas,Call,(types_enter(Schemas,Args,Frame),Call,types_exit(Frame,Out))) :-
     Raw=Out,maplist(type_prime_schema,Schemas).
 type_split_slots(_,[],[],[],[],[]).

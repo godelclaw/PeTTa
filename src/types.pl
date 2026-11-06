@@ -138,8 +138,15 @@ type_alias_input(F,_,_,F).
 
 % Each unknown leaf owns one suspension. Binding it compiles that leaf once;
 % other input evidence remains intact. Completed vacuous frames are released.
-type_validate(Frame) :- arg(1,Frame,Options),
-    (Options==[] -> true;arg(2,Frame,Stage), \+ \+ (member(option(_,T,F),Options),(T=='$any'(true)->true;type_kind(T)),type_satisfies(F,Stage))).
+type_validate(Frame) :-
+    arg(1, Frame, Options),
+    ( Options == [] -> true
+    ; arg(2, Frame, Stage),
+      \+ \+ ( member(option(_, T, F), Options),
+               (T == '$any'(true) -> true; type_kind(T)),
+               type_satisfies(F, Stage)
+             )
+    ).
 % Until its call returns, an input whose parameter recurs only in the result
 % constrains nothing; only its evidence must keep up with later bindings. A
 % call that is still running records every binding of the variables it
