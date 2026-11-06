@@ -26,6 +26,7 @@ Atom declaration after its equation        3                   (+ 2 1)
 Mixed Number->Atom / String->Number,
   body (+ 1 2), input "s"                  ()                  (3)
 Hidden open input of an uninhabited type   (7)                 (7)
+(ListOf Atom) input on (1 "a" foo)         ()                  (7)
 
 The mixed case uses the draft's explicit unanimity policy: only unanimous Atom
 positions hold or quote. That policy and the separation of reflection from
@@ -80,13 +81,17 @@ ListOf suffix obtained with cdr-atom. Other inputs/results remain checked;
 contract edits retire the private entry. Arbitrary nominal families and shared
 overloads do not gain these structural assumptions.
 
-The three core files total 656 lines. The optimizations are separate commits,
+The three core files total 678 lines. The optimizations are separate commits,
 so their generated-code transformations can be reviewed independently.
 
-Nested wildcard checking is not implemented. Atom in a function slot remains
-an evaluation convention; outside those slots, mode words remain ordinary
-value-type names. The generic checking-pattern extension is not a hidden
-change to that source policy.
+Atom in a function slot is an evaluation convention. Inside a type, including
+a constructor field, Atom is the type of every value, so (ListOf Atom) holds
+every list; a declaration (: x Atom) is no type evidence. A declared family
+has no known variance: (List Atom) holds the lists built at index Atom, not a
+value declared (List Number). _ and %Undefined% stand for a whole slot only;
+inside a type, a parameter such as $t names some type. The other mode words
+are ordinary value-type names inside a type. Function types are compared as
+written.
 
 Unrestricted slots do not inspect cyclic host terms. Structural checks reject
 cycles. Finite-tree proofs do not establish behavior on rational trees.
@@ -99,25 +104,36 @@ serializing live constraint frames.
 Measured costs
 --------------
 
-Three interleaved repetitions, same declared workloads on both checkouts.
+Five interleaved repetitions, same declared workloads on both checkouts.
 Microbenchmarks enter through compiled MeTTa calls, including stable's call-site
 checks. Complete examples include loading. Times are median CPU seconds.
 
 Workload                         Stable inf.   Draft inf.    Stable s  Draft s
-10,000 typed scalar calls             90,005       60,005      .00262   .00203
-Typed counting, 200,000 steps       2,000,014    1,000,009      .09854   .01730
-Typed constructor walk, 400         1,851,823       83,012      .17413   .00422
-Typed open-variable loop              90,014       70,025      .00430   .00159
-nilbc                            20,100,081   24,815,932       .61502   .81221
+10,000 typed scalar calls             90,005       60,005      .00242   .00209
+Typed counting, 200,000 steps       2,000,014    1,000,009      .08204   .01579
+Typed constructor walk, 400         1,851,823       83,012      .15206   .00410
+Typed open-variable loop              90,014       70,025      .00328   .00159
+nilbc                            20,100,081   19,355,195      .57675   .53167
+he_minimalmetta                  24,199,749   20,844,814      .76443   .69233
 
-The nilbc regression remains: about 23% more inferences and 32% more CPU in
-this run. Watcher changes reduce its previous 31,540,679 inferences by about
-21%; they do not make the stronger contract free. Input evidence is retained.
+nilbc declares (: bc (-> $a Nat $b $b)) and recurses on open proof queries. Its
+input evidence is retained, and an open input watched by an enclosing running
+call is not watched again by each nested call, so nested calls on one open
+value cost linear rather than quadratic time.
 
-Ten untyped execution probes match inference counts exactly. This does not
-claim zero load-time or mixed-dispatch overhead. Whole-call residual validation
-can still rescan correlated open structures; the linear improvement applies
-to the protected fragment above.
+bc always returns its query, instantiated, so the shared $b repeats what its
+equations already guarantee, and keeping it exact still means recording
+evidence for the open query on each of its 18,708 calls. Declared as
+(: bc (-> $space Nat $query $answer)), with the same answers, only Nat is
+checked: 419,874 inferences, against 20,099,272 for stable-fixed with that
+declaration and 313,821 with bc undeclared.
+
+Ten untyped execution probes match inference counts exactly. The other complete
+examples, holbenchmark, nars_tuffy and tilepuzzle, stay within 0.5% of stable's
+inference counts. This does not claim zero load-time or mixed-dispatch
+overhead. Whole-call residual validation can still rescan correlated open
+nominal structures; the linear improvement applies to the protected fragment
+above and to nested calls on one open input.
 
 Mathematical correspondence and trust boundary
 ----------------------------------------------
@@ -135,6 +151,7 @@ RuntimeTyping.CanonicalTypes
   .waive_joint_iff_on_ground              coverage in models containing its facts
 CheckCost.entry_check_covers_suffixes    reuse of protected ListOf suffix checks
 CheckCost.incremental_exact              per-part structural checking
+CheckingPatterns.matches_any             Atom inside a type
 Refresh.update_eq_fresh_compile          declaration dependency/refresh tracking
 
 These are specifications and conditional laws, not a proof that the handwritten
@@ -148,11 +165,14 @@ It is not the selected Atom-template convention of this draft.
 Validation
 ----------
 
-106 runtime tests, 49 definition-order tests and 10 parser tests pass normally
-and under -O. The example run passes 177 files / 786 assertions with the usual
-interactive exclusions. The new watcher controls cover independent constraints
-after discharge/copy and a later compatible witness/overload with one effect.
-Compiled and general membership also agree on the additional edit audit.
+110 runtime tests, 49 definition-order tests and 10 parser tests pass normally
+and under -O. The example run passes 176 files / 785 assertions, excluding the
+interactive, network and GPU examples. The watcher controls cover independent
+constraints after discharge/copy, a later compatible witness/overload with one
+effect, and an inner call's input bound inside or after that call.
+Compiled and general membership, and contracts on ground values and on values
+bound later, agree on 1,650 audited type/value pairs, including Atom inside
+types, before and after declaration edits.
 
 The source hashes remained unchanged during the benchmark. Passing these
 checks establishes the recorded cases, not universal correctness or a promise

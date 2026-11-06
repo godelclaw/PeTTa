@@ -69,16 +69,16 @@ requires an open value at that point. These modes install no delayed requirement
 
 These are syntactic function-slot observations. Inside a type, including a
 constructor field, Atom is the type of every value: (ListOf Atom) holds every
-list and (TupleOf Number Atom) every two-element list starting with a number. A declaration
-(: x Atom) therefore says nothing and is no type evidence: a value's own
-evidence never gives it the type Atom, which reaches a parameter only through
-an explicit index such as (List Atom). Holding is decided by the literal slot,
-so a parameter gains no holding power either way. A declared family has no known
-variance, so (List Atom) holds the lists built at index Atom, not a value
-declared (List Number). The other mode words are ordinary value-type names
-inside a type. _ and %Undefined% stand for a whole slot; inside a type they are
-not types, and a parameter such as $t names some type there. Arrow interface
-descriptions retain their slot annotations.
+list and (TupleOf Number Atom) every two-element list starting with a number.
+A declaration (: x Atom) therefore says nothing and is no type evidence: a
+value's own evidence never gives it the type Atom, which reaches a parameter
+only through an explicit index such as (List Atom). Holding is decided by the
+literal slot, so a parameter gains no holding power either way. A declared
+family has no known variance, so (List Atom) holds the lists built at index
+Atom, not a value declared (List Number). The other mode words are ordinary
+value-type names inside a type. _ and %Undefined% stand for a whole slot;
+inside a type they are not types, and a parameter such as $t names some type
+there. Arrow interface descriptions retain their slot annotations.
 
 A check that only requires a value to have some type checks nothing, because
 every finite value has a canonical type: a primitive, Symbol or declared
@@ -131,8 +131,9 @@ Input guards remain before head matching. Typed tail recursion keeps constant
 stack space; its checked entry adds one predicate call per iteration.
 A self-call, in tail position or not, whose argument is (cdr-atom $x) of an
 input $x checked against a (ListOf T) built only from the structural and
-primitive types above, at a slot of the same type, skips that slot's check: the tail of such a list is again a (ListOf T), and an open
-tail keeps the input's delayed checks. It uses its own private checked entry
+primitive types above, at a slot of the same type, skips that slot's check:
+the tail of such a list is again a (ListOf T), and an open tail keeps the
+input's delayed checks. It uses its own private checked entry
 with the remaining checks, retired in the same way, so a list walk checks its
 list once.
 
@@ -155,6 +156,12 @@ Open values and storage
 One variable has one shared evidence cell and a list of affected contracts.
 Binding it records its new evidence once, then checks those contracts. Private
 cells are attributed too, preserving their identity through native copying.
+A call that is still running keeps its watchers until it returns, so every
+binding of a variable it watches is recorded. An input whose parameter recurs
+only in the result constrains nothing before the result exists; it watches only
+the variables no running call watches yet, and the rest when it returns with
+something left to check. Nested calls on one open value add no watcher per
+level.
 Completed vacuous contracts release their input records and remove their variable
 watchers. A kind-only attribute on a private type
 parameter does not prevent release. Other constraints and pattern links do.
@@ -222,7 +229,8 @@ Refreshed baseline and compatibility record
 This draft is based on stable-fixed 5d4b75e, including the independent call-arity
 and partial-call repairs. The checked-entry implementation replaces their legacy
 call-site helpers. Subsequent commits repair formation and mode checks, eliminate
-vacuous checks, reuse protected structural checks, and reduce watcher overhead.
+vacuous checks, reuse protected structural checks, reduce watcher and evidence
+overhead, and read Atom inside a type as the type of every value.
 
 Two assertions in typed_partial_arguments.metta intentionally differ from the
 baseline: multiple type witnesses now produce one body answer and one effect.
@@ -231,8 +239,8 @@ to use explicit application guards for reflective classifications.
 
 Mode unanimity and the separation of get-type from enforcement are draft policies
 that need compatibility review. Functions with unanimously Atom results retain
-their template behavior. No new nested wildcard policy is introduced by this
-baseline refresh.
+their template behavior. Inside a type, Atom admits every value; _ and
+%Undefined% stay whole-slot words.
 
 A variable's evidence is captured once per binding, but a joint frame can be
 validated many times. Open structures can therefore incur quadratic rechecking;
