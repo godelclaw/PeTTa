@@ -16,6 +16,8 @@ runtime_open_cost(N,Cost) :- user:rt_open_cells(L,_),statistics(inferences,Befor
     runtime_open_cells(L,N),statistics(inferences,After),Cost is After-Before.
 runtime_walk_cost(F,Extra,N,Cost) :- numlist(1,N,L),append([L|Extra],[_],Args),Goal=..[F|Args],
     statistics(inferences,Before),once(user:call(Goal)),statistics(inferences,After),Cost is After-Before.
+runtime_nest_cost(N,Cost) :- statistics(inferences,Before),once(user:rt_nest(N,Q,R)),
+    statistics(inferences,After),Cost is After-Before,assertion(Q==R).
 runtime_input_barrier(Events,Release) :-
     thread_send_message(Events,entered),
     (thread_get_message(Release,resume,[timeout(5)])->true;throw(runtime_barrier_timeout)).
@@ -377,6 +379,20 @@ test(typed_tail_recursion_runs_in_constant_space) :-
     maplist(user:runtime_stack_delta(rt_stack_num,[]),[50,50000],[Short,Long]),
     assertion(Short=:=Long).
 % A self-call on the tail of a checked list does not walk that tail again.
+test(an_inner_call_keeps_checking_an_input_watched_by_its_caller) :-
+    program("(: rt_in1 (-> $b $b)) (= (rt_in1 $x) 1)
+      (: rt_in2 (-> $b $b)) (= (rt_in2 $x) (let $x \"s\" 1))
+      (: rt_out1 (-> $a $a)) (= (rt_out1 $q) (let $r (rt_in1 $q) (let $q \"s\" $q)))
+      (: rt_out2 (-> $a $a)) (= (rt_out2 $q) (let $r (rt_in1 $q) (let $q 5 $q)))
+      (: rt_out3 (-> $a $a)) (= (rt_out3 $q) (let $r (rt_in2 $q) $q))
+      (: rt_out4 (-> $a $a)) (= (rt_out4 $q) (let $r (rt_in1 $q) $q))
+      !(collapse (rt_out1 $v)) !(collapse (rt_out2 $v)) !(collapse (rt_out3 $v))
+      !(collapse (let $w (rt_out4 $v) (let $v \"s\" $w))) !(collapse (let $w (rt_out4 $v) (let $v 3 $w)))",R),
+    assertion(R == [[],[5],[],[],[3]]).
+test(nested_calls_on_one_open_input_cost_linear_time) :-
+    program("(: rt_nest (-> Number $b $b))
+      (= (rt_nest $n $q) (if (== $n 0) (let $q (a $x $y) $q) (rt_nest (- $n 1) $q)))",_),
+    maplist(runtime_nest_cost,[200,800],[Small,Large]),assertion(Large < 6*Small).
 test(self_calls_on_a_checked_list_tail_skip_its_check) :-
     program("(: rt_walk_sum (-> (ListOf Number) Number)) (= (rt_walk_sum $l) (if (== $l ()) 0 (+ (car-atom $l) (rt_walk_sum (cdr-atom $l)))))
       (: rt_walk_len (-> (ListOf Number) Number Number)) (= (rt_walk_len $l $n) (if (== $l ()) $n (rt_walk_len (cdr-atom $l) (+ $n 1))))

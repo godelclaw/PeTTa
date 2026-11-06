@@ -1,4 +1,4 @@
-:- module(type_obligations, [cell/2, watch/4, restore/3, release/2]).
+:- module(type_obligations, [cell/2, watch/4, recorded/1, restore/3, release/2]).
 
 % One evidence cell per program variable. Contracts share the cell, so binding
 % a heavily used variable does not repeatedly inspect the same value.
@@ -13,6 +13,9 @@ watch(V,Cell,Frame,Kind) :-
 has_watch([watch(Frame,Kind0)|_],Identity,Kind) :-
     Kind0==Kind,arg(3,Frame,Other),Identity==Other,!.
 has_watch([_|Rest],Identity,Kind) :- has_watch(Rest,Identity,Kind).
+% A running call keeps its watchers until it returns.
+recorded(V) :- get_attr(V,type_obligations,state(_,Watching)),
+    member(watch(Frame,_),Watching),arg(2,Frame,input),arg(1,Frame,Options),Options\==[],!.
 
 % Marking private cells preserves their sharing through native attribute copies.
 mark(Cell) :- (var(Cell)->put_attr(Cell,type_obligations,cell_marker);true).

@@ -74,7 +74,7 @@ types_exit(Frame, Value) :- acyclic_term(Value), arg(1,Frame,Options),
     arg(4,Frame,Before),type_stamp(Now),(Before==Now->Stable=true;Stable=false),
     type_output_options(Options,Value,Stable,Next,Fresh),Next\==[],setarg(1,Frame,Next),setarg(2,Frame,output),
     type_validate(Frame),type_discharge(Frame),
-    (arg(1,Frame,[]) -> true;maplist(type_arm(Frame),Fresh)).
+    (arg(1,Frame,[]) -> true;maplist(type_arm_passive(Frame),Next),maplist(type_arm(Frame),Fresh)).
 type_output_options([],_,_,[],[]).
 type_output_options([option(Mode,Type,Before)|Options],Value,Stable,Next,Fresh) :-
     ( Mode=mode(M) -> (type_observe(M,Value)->After=yes,Keep=true;Keep=false)
@@ -103,10 +103,22 @@ type_alias_input(F,_,_,F).
 % other input evidence remains intact. Completed vacuous frames are released.
 type_validate(Frame) :- arg(1,Frame,Options),
     (Options==[] -> true;arg(2,Frame,Stage), \+ \+ (member(option(_,T,F),Options),(T=='$any'(true)->true;type_kind(T)),type_satisfies(F,Stage))).
-type_arm(Frame,passive(has(E,_))) :- !,type_arm_evidence(Frame,E,passive).
+% Until its call returns, an input whose parameter recurs only in the result
+% constrains nothing; only its evidence must keep up with later bindings. A
+% call that is still running records every binding of the variables it
+% watches, so such an input watches only the variables no running call
+% watches yet. The rest are watched when the call returns, if anything
+% remains to check.
+type_arm(Frame,passive(has(E,_))) :- !,arg(1,E,Value),term_variables(Value,Vars),
+    (arg(2,Frame,input) -> exclude(type_obligations:recorded,Vars,Own);Own=Vars),
+    maplist(type_watch_value(Frame,passive),Own).
 type_arm(Frame,has(E,_)) :- !,type_arm_evidence(Frame,E,active).
 type_arm(Frame,both(A,B)) :- !,type_arm(Frame,A),type_arm(Frame,B).
 type_arm(_,_).
+type_arm_passive(Frame,option(_,_,both(Input,_))) :- !,type_arm_passive(Frame,Input).
+type_arm_passive(Frame,passive(F)) :- !,type_arm(Frame,passive(F)).
+type_arm_passive(Frame,both(A,B)) :- !,type_arm_passive(Frame,A),type_arm_passive(Frame,B).
+type_arm_passive(_,_).
 % Native traversal visits each open value variable once, including repeated
 % occurrences and opaque fields; declaration parameters are not value variables.
 type_arm_evidence(Frame,E,Kind) :- arg(1,E,Value),term_variables(Value,Vars),
