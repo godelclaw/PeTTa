@@ -2,6 +2,11 @@
 
 % One evidence cell per program variable. Contracts share the cell, so binding
 % a heavily used variable does not repeatedly inspect the same value.
+% Attribute state(Cell, Watches) belongs to a program variable. Cell is a
+% private attributed variable until binding captures evidence into it;
+% Watches contains watch(Frame, active/passive), deduplicated by frame identity.
+% The separate cell_marker preserves this sharing under native term copying.
+% Updates are backtrackable: failed branches must restore both cells and watches.
 cell(V,Cell) :-
     (get_attr(V,type_obligations,state(Stored,_)) -> Cell=Stored
     ;mark(Cell),put_attr(V,type_obligations,state(Cell,[]))).
@@ -13,7 +18,8 @@ watch(V,Cell,Frame,Kind) :-
 has_watch([watch(Frame,Kind0)|_],Identity,Kind) :-
     Kind0==Kind,arg(3,Frame,Other),Identity==Other,!.
 has_watch([_|Rest],Identity,Kind) :- has_watch(Rest,Identity,Kind).
-% A running call keeps its watchers until it returns.
+% A running call keeps its watchers until it returns. A passive nested input
+% may borrow that recorder, but must arm its own unresolved checks at exit.
 recorded(V) :- get_attr(V,type_obligations,state(_,Watching)),
     member(watch(Frame,_),Watching),arg(2,Frame,input),arg(1,Frame,Options),Options\==[],!.
 
