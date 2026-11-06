@@ -245,8 +245,10 @@ test(explicit_residuals_survive_a_second_native_copy) :-
     assertion(\+(D=2)),D="ok".
 
 test(constructor_fields_are_value_types_not_call_modes) :-
-    program("(: rt_quoted_atom Atom) (: rt_BoxAtom (-> Atom rt_AtomBox)) (: rt_box_atom (-> rt_AtomBox Number)) (= (rt_box_atom $x) 7) !(rt_box_atom (rt_BoxAtom rt_quoted_atom)) !(collapse (rt_box_atom (rt_BoxAtom 2)))",R),
-    assertion(R == [7,[]]).
+    program("(: rt_quoted_atom Atom) (: rt_BoxAtom (-> Atom rt_AtomBox)) (: rt_box_atom (-> rt_AtomBox Number)) (= (rt_box_atom $x) 7)
+      (: rt_BoxSym (-> Expression rt_SymBox)) (: rt_box_sym (-> rt_SymBox Number)) (= (rt_box_sym $x) 7)
+      !(rt_box_atom (rt_BoxAtom rt_quoted_atom)) !(collapse (rt_box_atom (rt_BoxAtom 2))) !(collapse (rt_box_sym (rt_BoxSym (1 2))))",R),
+    assertion(R == [7,[7],[]]).
 test(a_type_parameter_cannot_gain_argument_holding_power) :-
     program("(: rt_label_atom Atom) (: rt_mode_poly (-> $a $a)) (= (rt_mode_poly $x) 2) !(collapse (rt_mode_poly rt_label_atom))",R),
     assertion(R == [[]]).
@@ -379,6 +381,26 @@ test(typed_tail_recursion_runs_in_constant_space) :-
     maplist(user:runtime_stack_delta(rt_stack_num,[]),[50,50000],[Short,Long]),
     assertion(Short=:=Long).
 % A self-call on the tail of a checked list does not walk that tail again.
+test(atom_inside_a_type_admits_every_value) :-
+    program("(: rt_any_list (-> (ListOf Atom) Number)) (= (rt_any_list $l) 7)
+      (: rt_any_pair (-> (TupleOf Number Atom) Number)) (= (rt_any_pair $l) 7)
+      (: rt_AnyBox Type) (: rt_any_box (-> Atom rt_AnyBox))
+      (: rt_unbox (-> rt_AnyBox Number)) (= (rt_unbox $b) 7)
+      (: rt_AList (-> $t Type)) (: rt_anil (rt_AList $t)) (: rt_acons (-> $t (rt_AList $t) (rt_AList $t)))
+      (: rt_nums (rt_AList Number)) (: rt_anys (rt_AList Atom))
+      (: rt_alist (-> (rt_AList Atom) Number)) (= (rt_alist $l) 7)
+      !(collapse (rt_any_list (1 \"a\" foo))) !(collapse (rt_any_list ())) !(collapse (rt_any_list 5))
+      !(collapse (rt_any_pair (1 foo))) !(collapse (rt_any_pair (\"a\" foo)))
+      !(collapse (rt_unbox (rt_any_box \"s\")))
+      !(collapse (rt_alist (rt_acons 1 (rt_acons \"a\" rt_anil))))
+      !(collapse (rt_alist rt_nums)) !(collapse (rt_alist rt_anys))",R),
+    assertion(R == [[7],[7],[],[7],[],[7],[7],[],[7]]),
+    user:rt_any_list(L,7),L=[1,"a",X],X=foo,
+    assertion(\+ (user:rt_any_list(M,7),M=5)).
+test(an_atom_declaration_is_no_type_evidence) :-
+    program("(: rt_top_sym Atom) (: rt_same_t (-> $a $a Bool)) (= (rt_same_t $x $y) True)
+      !(collapse (rt_same_t rt_top_sym 1)) !(collapse (rt_same_t rt_top_sym foo))",R),
+    assertion(R == [[],[true]]).
 test(an_inner_call_keeps_checking_an_input_watched_by_its_caller) :-
     program("(: rt_in1 (-> $b $b)) (= (rt_in1 $x) 1)
       (: rt_in2 (-> $b $b)) (= (rt_in2 $x) (let $x \"s\" 1))

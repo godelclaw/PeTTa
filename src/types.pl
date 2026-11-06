@@ -42,10 +42,15 @@ type_eta_allowed(F,N) :-
 type_mode(T) :- nonvar(T), memberchk(T, ['Atom','Variable','Symbol','Expression','Grounded']).
 type_observe(T, V) :- ( T == 'Atom' -> true ; T == 'Variable' -> var(V)
     ; var(V) -> true ; 'get-metatype'(V, M), M == T ).
+% Atom is the type of every value. _ and %Undefined% stand for a whole
+% slot; inside a type they are not types, so they stay ill-kinded there.
 type_normalize(T, R) :- ( var(T) -> R = T
     ; (T == '%Undefined%'; T == '_') -> R = '$any'(true)
+    ; type_normalize_part(T, R) ).
+type_normalize_part(T, R) :- ( var(T) -> R = T
+    ; T == 'Atom' -> R = '$any'(true)
     ; is_list(T),T=[Tag|_],Tag==(->) -> R=T
-    ; is_list(T) -> maplist(type_normalize, T, R) ; R = T ).
+    ; is_list(T) -> maplist(type_normalize_part, T, R) ; R = T ).
 type_slot(T, V, R) :- (type_mode(T) -> type_observe(T, V), R = '$any'(true); type_normalize(T, R)).
 type_free_schema(Ts) :- forall(member(T, Ts),
     (T == 'Atom'; T == '%Undefined%'; T == '_')).
@@ -178,7 +183,7 @@ type_curried(Ts,Ts).
 type_curried(Ts,Curried) :- append(Now,[Next|Rest],Ts),Now\==[],Rest\==[],
     type_curried([Next|Rest],Later),append(Now,[[->|Later]],Curried).
 type_matching_row(V,P-T) :- nonvar(T),acyclic_term(T),
-    \+ memberchk(T,['Number','String','Bool','%Undefined%','_']),
+    \+ memberchk(T,['Number','String','Bool','Atom','%Undefined%','_']),
     (T=[Tag|_],Tag==(->) -> atom(V),is_list(T),T=[_,_|_];type_nominal_result(T)),
     \+ \+ type_kind(T),
     copy_term_nat(P-V,Pattern-Value),unify_with_occurs_check(Pattern,Value).
@@ -200,6 +205,7 @@ type_member(V,T,Pending) :- type_capture(V,E),type_evidence_has(E,T,Pending,[]).
 type_solve([],[],[]).
 type_solve([V|Vs],[T|Ts],Pending) :- type_member(V,T,Here),type_solve(Vs,Ts,Rest),append(Here,Rest,Pending).
 type_kind(T) :- var(T),!,freeze(T,type_kind(T)).
+type_kind(T) :- T=='$any'(true),!.
 type_kind(T) :- atomic(T),!,\+memberchk(T,['ListOf','TupleOf','PairOf','Opaque',->,'%Undefined%','_']).
 type_kind([]) :- !.
 type_kind([H|Args]) :-
@@ -233,7 +239,7 @@ type_evidence_has(E,T,P,R) :-
     type_kind(T),freeze(T,type_nonprimitive(T)),type_evidence_branch(E,T,P,R).
 type_nonprimitive(T) :- \+ memberchk(T,['Number','String','Bool']).
 type_evidence_branch(E,T,P,R) :- arg(1,E,Value),arg(2,E,Rows),member(Pattern-Type,Rows),
-    copy_term_nat(Pattern-Type,A-U),type_kind(U),unify_with_occurs_check(T,U),
+    copy_term_nat(Pattern-Type,A-Declared),type_normalize(Declared,U),type_kind(U),unify_with_occurs_check(T,U),
     type_pattern_match(A,Value,P,R).
 type_evidence_branch(atom(_,[]),'Symbol',P,P).
 type_evidence_branch(cons(Value,_,Ctors,_,Tail),T,P,R) :-
@@ -434,7 +440,7 @@ type_inline(T,V,Goal) :-
     ; T == 'Bool' -> Test=(V==true->true;V==false) ), !,
     Goal=(var(V) -> type_freeze(V,Test); Test).
 type_inline(T,_,true) :- (T == 'Atom'; T == '%Undefined%'; T == '_'),!.
-type_inline(T,V,Goal) :- ground(T),\+ type_mode(T),
+type_inline(Declared,V,Goal) :- ground(Declared),\+ type_mode(Declared),type_normalize(Declared,T),
     type_code_goal(T,V,[],Fast),
     (type_structural(T) -> Open=(acyclic_term(V),type_parts(T,V)) ; Open=types_enter([[T,'_']],[V],_)),
     Goal=(ground(V) -> acyclic_term(V),once(Fast);Open).
@@ -443,10 +449,12 @@ type_inline(T,V,Goal) :- ground(T),\+ type_mode(T),
 % same members in every declaration view. An open value of such a type is
 % checked one known part at a time: each binding checks only the structure it
 % adds, and an unknown part waits for its own binding.
-type_structural(T) :- atom(T),!,memberchk(T,['Number','String','Bool']).
+type_structural(T) :- T=='$any'(true),!.
+type_structural(T) :- atom(T),!,memberchk(T,['Number','String','Bool','Atom']).
 type_structural(['ListOf',T]) :- !,type_structural(T).
 type_structural(['PairOf',A,B]) :- !,type_structural(A),type_structural(B).
 type_structural(['TupleOf'|Ts]) :- maplist(type_structural,Ts).
+type_parts(T,_) :- T=='$any'(true),!.
 type_parts(T,V) :- type_inline_primitive(T,V,Test),!,(var(V)->type_freeze(V,Test);Test).
 type_parts(T,V) :- var(V),!,type_freeze(V,type_parts_bound(T,V)).
 type_parts(T,V) :- type_part(T,V).
@@ -522,8 +530,8 @@ type_resolve(F,Args,Out,Goal) :- length(Args,N),A is N+1,
     ;metta_memoized_dispatch_call(F,Args,Out,Goal)->true
     ;append(Args,[Out],All),Goal=..[F|All]).
 
-type_prime_schema(Schema) :- forall((member(T,Schema),ground(T),\+ type_mode(T),T\=='_',T\=='%Undefined%'),
-    type_code_goal(T,_,[],_)).
+type_prime_schema(Schema) :- forall((member(D,Schema),ground(D),\+ type_mode(D),D\=='_',D\=='%Undefined%'),
+    (type_normalize(D,T),type_code_goal(T,_,[],_))).
 type_ground_formula(T,V) :- type_member_key(T,Key),
     (type_member_code(Key,T,Name) -> Call=..[Name,V],once(Call);type_ground_check(T,V)).
 

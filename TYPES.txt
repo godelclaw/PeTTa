@@ -67,10 +67,18 @@ An open value provisionally passes Symbol, Expression and Grounded; Variable
 requires an open value at that point. These modes install no delayed requirement.
 %Undefined% and _ impose no membership requirement.
 
-These are syntactic function-slot observations. A parameter later instantiated
-to the ordinary type name Atom gains no holding power. Within constructor
-fields, mode words are ordinary value-type names. Arrow interface descriptions
-retain their slot annotations.
+These are syntactic function-slot observations. Inside a type, including a
+constructor field, Atom is the type of every value: (ListOf Atom) holds every
+list and (TupleOf Number Atom) every two-element list starting with a number. A declaration
+(: x Atom) therefore says nothing and is no type evidence: a value's own
+evidence never gives it the type Atom, which reaches a parameter only through
+an explicit index such as (List Atom). Holding is decided by the literal slot,
+so a parameter gains no holding power either way. A declared family has no known
+variance, so (List Atom) holds the lists built at index Atom, not a value
+declared (List Number). The other mode words are ordinary value-type names
+inside a type. _ and %Undefined% stand for a whole slot; inside a type they are
+not types, and a parameter such as $t names some type there. Arrow interface
+descriptions retain their slot annotations.
 
 A check that only requires a value to have some type checks nothing, because
 every finite value has a canonical type: a primitive, Symbol or declared
