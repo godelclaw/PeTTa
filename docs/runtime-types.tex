@@ -1,0 +1,333 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype,amsmath,amssymb,booktabs,tabularx,enumitem}
+\usepackage[margin=23mm]{geometry}
+\usepackage[dvipsnames]{xcolor}
+\usepackage[colorlinks=true,linkcolor=MidnightBlue,urlcolor=MidnightBlue,citecolor=MidnightBlue]{hyperref}
+\usepackage{listings}
+\lstset{basicstyle=\ttfamily\small,columns=fullflexible,keepspaces=true,
+  frame=single,rulecolor=\color{black!20},breaklines=true}
+\setlist{nosep,leftmargin=*}
+\newcommand{\any}{\mathsf{any}}
+\newcommand{\List}{\mathsf{ListOf}}
+\newcommand{\checks}[3]{#1\vdash #2\Leftarrow #3}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\name}[1]{\nolinkurl{#1}}
+\hypersetup{pdftitle={Runtime Membership Contracts for SWI-PeTTa},
+  pdfsubject={Membership, open constraints, implementation and proof boundary},
+  pdfauthor={PeTTa runtime typing draft}}
+\title{Runtime Membership Contracts for SWI-PeTTa}
+\author{A concise account of the runtime typing draft}
+\date{6 November 2026}
+\begin{document}
+\maketitle
+\begin{abstract}
+A declared function has one checked entry. Membership checks constrain values
+without generating extra executions of its equations; open values retain
+requirements that are reconsidered when they bind. This note describes the
+mathematical reading, the native Prolog implementation, and the boundary between
+proved abstract laws and tested implementation behavior. It retains PeTTa's
+Atom argument and result conventions. It is a research draft, not a verified
+compiler or a static type system.
+\end{abstract}
+
+\section{Why membership contracts fit this runtime}
+PeTTa programs manipulate symbolic terms, unify variables, enumerate alternative
+answers and edit spaces. A useful boundary check must therefore accept partially
+known data, preserve sharing, and distinguish a failed membership test from an
+extra answer. Treating a declaration as a predicate on values gives a direct
+reading of these operations. For example:
+\begin{lstlisting}
+(: Nil (List $a))
+(: Cons (-> $a (List $a) (List $a)))
+(: same (-> $a $a Bool))
+(= (same $x $y) True)
+\end{lstlisting}
+The repeated \code{$a} requires a common type witness. It does not prove that
+\code{same}'s implementation is universally parametric. Constructor parameters
+are fresh at each use, whereas all occurrences in one function signature share
+one assignment.
+
+This approach draws on polymorphic logic programming~\cite{mycroft} and the
+constraint-logic-programming separation between goals and constraints~\cite{clp}.
+Those are foundations and precedents, not claims that this implementation
+satisfies all results of either work. Here declarations guard execution;
+they do not statically prove all equation bodies well typed.
+
+SWI-Prolog supplies the mechanisms this design needs: indexed clauses for
+membership, unification for private type equations, and attributed variables for
+requirements that survive until a value binds~\cite{attvar}.
+Independent primitive checks use \code{freeze/2}~\cite{freeze}.
+Reflection remains separate: \code{get-type} may be extended by applications,
+but enforcement reads declarations rather than executing arbitrary reflective
+code.
+
+\section{Judgments, witnesses and explicit checking patterns}
+Let $v$ range over finite first-order values, with open values additionally
+containing program variables. Let $\Gamma$ describe a declaration view.
+Proper type witnesses $\tau$ are finite type expressions, and $\theta$ maps
+signature parameters to such witnesses. A checking pattern $p$ may also contain
+an explicit unrestricted check $\any$.
+These two syntactic categories must not be conflated.
+
+Write $\checks{\Gamma}{v}{p}$ for checking a closed value against a closed
+pattern. Representative rules are:
+\[
+ \frac{v\text{ is represented as a number}}
+      {\checks{\Gamma}{v}{\mathsf{Number}}}
+ \qquad
+ \frac{}{\checks{\Gamma}{v}{\any}}
+ \qquad
+ \frac{\checks{\Gamma}{v_i}{p}\quad(1\leq i\leq n)}
+      {\checks{\Gamma}{[v_1,\ldots,v_n]}{\List(p)}} .
+\]
+Formation is a premise: \code{(ListOf ListOf)} is malformed, so even an empty
+list must not pass it. Runtime guards for primitive representations are not
+casts: a declaration cannot make a symbol a Number.
+
+Nominal facts provide membership of whole values. Constructor declarations
+provide membership by checking fields and matching the result family.
+Schematically, for a well-formed constructor scheme:
+\[
+ \frac{c:p_1,\ldots,p_n\to K(\bar q)\in\Gamma
+       \qquad \checks{\Gamma}{v_i}{\rho p_i}\ (1\leq i\leq n)}
+      {\checks{\Gamma}{c(v_1,\ldots,v_n)}{K(\rho\bar q)}} .
+\]
+The local matching substitution $\rho$ preserves all equalities in the
+constructor scheme. Nominal pattern variables shared with type indices must
+be matched jointly. A whole-value fact gives no license to infer field
+invariants. Nonregular recursive families use the general checker when direct
+predicate generation would keep expanding.
+
+\paragraph{Where Atom belongs.}
+The source has distinct uses which must remain explicit:
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Position & Draft interpretation\\ \midrule
+Literal Atom input slot & Hold caller syntax; no value restriction.\\
+Unanimous Atom result slots & Compile the equation body as a template.\\
+Atom in a structural element/field check & Unrestricted check $\any$.\\
+Atom in a user-family index & Explicit index, matched exactly; no inferred covariance.\\
+\code{_}, \texttt{\%Undefined\%} & Unrestricted whole slot; nested uses remain unsupported.\\
+\bottomrule
+\end{tabularx}
+\end{center}
+Thus \code{(ListOf Atom)} accepts a heterogeneous list. By contrast,
+\code{(List Atom)} need not accept a value declared \code{(List Number)}.
+User-family indices are not automatically covariant. Arrow interface
+annotations retain their calling conventions and are matched without a general
+subtyping relation.
+
+An unrestricted checking marker must never become the solution of a shared
+signature parameter, including inside a compound witness. Otherwise checking
+\code{(Pair $a Atom)} against a constructor with result \code{(Pair $x $x)}
+can waive the very equality it should preserve. The runtime keeps a delayed
+proper-witness obligation on signature variables to prevent that escape.
+Explicit constructor-field demands may still be unrestricted.
+A bare fact \code{(: x Atom)} supplies no distinguishing witness; an atom
+without usable proper nominal evidence retains its canonical Symbol fallback.
+
+This distinction is why \code{(same 1 "s")} fails even though a separately
+written \code{Atom} check accepts either value. Adding an unrestricted check
+to the checking language does not add a universal witness to type inference.
+
+\section{One call, one body computation}
+For fully known inputs $\bar v$, a selected signature
+$d=(p_1,\ldots,p_n\to p_r)$ has the idealized staged contract
+\[
+ \operatorname{Joint}_{d}(\Gamma_0,\Gamma_1,\bar v,r)
+ \iff
+ \exists\theta:\mathsf{Proper}.\ 
+ \left(\bigwedge_i\checks{\Gamma_0}{v_i}{\theta p_i}\right)
+ \land \checks{\Gamma_1}{r}{\theta p_r}.
+\]
+Alternative declarations form a disjunction outside this judgment. They are
+alternative justifications for admission, not instructions to execute the
+body repeatedly. Entry retains the compatible alternatives; exit must not be
+restricted to whichever witness happened to be found first. Genuine
+nondeterministic equation answers retain their order and multiplicity.
+
+The operational outline is:
+\[
+ \boxed{\text{prepare arguments}}
+ \longrightarrow \boxed{\text{check/retain input evidence}}
+ \longrightarrow \boxed{\text{execute worker}}
+ \longrightarrow \boxed{\text{check result}} .
+\]
+Evaluation modes are chosen before evaluating argument expressions.
+Captured partial-application arguments are already values and are not evaluated
+again. Direct, indirect, completed partial and native/memoized routes converge
+on checked entries when a contract applies. Result checks occur after the body;
+they must not be moved ahead of effects or exceptions. Existing output
+unification and head constraints are retained.
+
+\paragraph{Open values.}
+An unknown value produces a residual requirement rather than a fabricated
+value. Private type substitutions may be solved, but checking does not bind
+program variables to invented data. One residual formula preserves correlated
+arguments and alternative signatures. Its observable behavior is rejection of
+known contradictions and reconsideration on later bindings; it is not a
+complete global inhabitation decision procedure.
+
+The displayed closed-input formula uses $\Gamma_0$ as a convenient single
+entry view. The native implementation is more specific: known input nodes
+retain evidence collected at entry, while a still-open leaf records evidence
+when it binds. This is not a whole-program historical snapshot.
+For example, if \code{old} and \code{new} both have type \code{A}, a call
+\code{keep(old)} may remove \code{old : A} and return \code{new}. Its retained
+input evidence still supports \code{A}, and its result is checked in the
+return view.
+
+An identity result may reuse retained evidence only under the recorded
+generation premise. Database generations are invalidation evidence, not a
+semantic replacement for the input records. Their transaction behavior matters
+and is documented by SWI-Prolog~\cite{transactions}.
+
+\section{Four small implementation units}
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+File & Responsibility\\ \midrule
+\code{types.pl} & Declaration index, membership evidence, joint frames,
+proper witnesses, local structural checks.\\
+\code{type_compilation.pl} & Worker/wrapper emission, call modes,
+tail/suffix reuse, publication and retirement.\\
+\code{type_membership.pl} & Indexed predicates for closed membership
+checks; general fallback and dependencies.\\
+\code{type_obligations.pl} & Native attribute cells, notification,
+copy restoration and release.\\
+\bottomrule
+\end{tabularx}
+\end{center}
+The first three use the existing runtime module so generated predicate names and
+definition-lifecycle hooks keep their interface. The attribute implementation is
+a Prolog module. Splitting source files introduces no dispatch layer.
+
+A frame is
+\code{choices(Options, Stage, Identity, Stamp, Values)}.
+An empty option list denotes discharge. Its formulas contain conjunctions,
+membership demands and passive evidence. A passive input whose parameter occurs
+only in the result must record later bindings, but need not solve that
+input/result relation before a result exists.
+
+One program variable owns an evidence cell and deduplicated watchers.
+A nested passive input may borrow a running caller's recorder, because that
+caller remains active until the nested call returns. At exit, any remaining
+obligation must acquire its own watchers. Native backtracking restores these
+updates. Copy tests must preserve shared cells, not just print the same answer.
+
+Collection uses ordinary \code{findall}. Visible constraints copy with their
+variables; disconnected local variables disappear. Space assertion retains
+native assertion behavior rather than serializing active constraint frames.
+Discarding hidden constraints is equivalent to logical existential projection
+only under the relevant satisfiability hypothesis. No synthetic answer wrapper
+or full declaration-world table is introduced.
+
+\section{Proof obligations and their actual status}
+The generic Lean library \name{Mettapedia.Logic.ConstraintTypes} is the
+mathematical reference~\cite{lean}. Its useful results include:
+\begin{enumerate}
+\item \textbf{Checker exactness.}
+\name{DeclarationTyping.check_iff} and
+\name{OpenTyping.compile_correct} relate executable abstract checkers to their
+declaration judgments.
+\item \textbf{Staged exactness.}
+\code{CallTyping.frame_exact} and \name{PatternContracts.frame_exact}
+retain one assignment across input and result conditions.
+\item \textbf{Compiled membership.}
+\name{DeterminedMembership.compiled_membership_correct} applies under its
+field-determination premises; whole-value nominal evidence is not constructor
+inversion.
+\item \textbf{Vacuous-parameter elimination.}
+\name{UnsharedParameters.waive_joint_iff} requires coverage:
+the value has some proper type. The canonical ground-value model supplies this
+hypothesis to models containing its facts. This is not Reynolds parametricity.
+\item \textbf{Local cost laws.}
+\name{CheckCost.incremental_exact} preserves verdicts after each new element;
+\name{entry_check_covers_suffixes} justifies reuse of a fixed element predicate
+on list suffixes.
+\end{enumerate}
+These are conditional laws of abstract models. There is no completed refinement
+proof for the source normalizer, Prolog emitter, native attributes or the whole
+interpreter. In particular, the Lean checking-pattern extension is more general
+than the selected source policy; its alternative body-evaluation policy is not
+the retained Atom-template convention.
+
+Finite trees are the mathematical value domain. Unrestricted native slots do not
+inspect cyclic host terms; checks that traverse structure test for cycles.
+Neither coverage nor list-cost theorems should be reported as theorems about
+arbitrary rational trees. Likewise, native watcher scheduling and sharing need
+tests in addition to the abstract binding laws.
+
+\section{Costs, compatibility and review}
+Checking all prefixes or suffixes of an $n$-element list performs
+$\sum_{k=1}^n k=n(n+1)/2$ element checks.
+For protected structural types, local suspensions check each newly bound part.
+For an eligible self-call on \code{cdr-atom} of an already checked list, the
+remaining list check can be reused; other inputs and result checks remain.
+These guarantees are narrow. General nominal or overloaded residual formulas
+can still rescan, and field extraction from a nominally typed value alone is
+not a proof that checks may be removed.
+
+The measured comparison below uses identical typed programs, compiled MeTTa
+calls on both trees, and three interleaved repetitions against
+\code{stable-fixed 5d4b75e}. Loading and assertions are included for \code{nilbc}.
+Inference counts are less sensitive to host load than CPU time.
+\begin{center}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Workload & Typed stable-fixed & Draft\\ \midrule
+10,000 scalar calls & 90,005 & 60,005\\
+Counting, 200,000 steps & 2,000,014 & 1,000,009\\
+Constructor walk, 400 cells & 1,851,823 & 83,012\\
+Open-variable loop & 90,014 & 70,025\\
+\code{nilbc}, original shared signature & 20,100,081 & 19,486,151\\
+\bottomrule
+\end{tabular}
+\end{center}
+The shared \code{$b} input/result constraint in \code{nilbc} is retained.
+Changing it to unrelated input and result parameters is a weaker contract, not
+a semantics-preserving optimization justified by a few passing examples.
+Returning the same term also need not preserve its nominal membership across
+declaration edits. No benchmark here removes that obligation to obtain a win.
+
+Ten untyped execution controls match inference counts; this is not a claim of
+zero loading or mixed-dispatch overhead. Validation covers 112 runtime tests,
+49 definition-order tests and 10 parser tests, in ordinary and optimized modes,
+plus 177 example files with 786 assertions and documented interactive exclusions.
+
+Compatibility changes remain visible: indirect calls and later bindings are
+checked; overlapping type evidence does not duplicate effects; reflection-based
+derived classifications require explicit application guards. Mixed Atom
+declarations use the draft's unanimity policy. The compiler still preserves
+unanimous Atom-result templates. These choices require review on their own
+merits; generic type theory does not compel an upstream language change.
+
+\begin{thebibliography}{9}
+\bibitem{mycroft}
+A. Mycroft and R. A. O'Keefe.
+\emph{A polymorphic type system for Prolog}.
+Artificial Intelligence, 23(3), 1984.
+\href{https://doi.org/10.1016/0004-3702(84)90017-1}{doi:10.1016/0004-3702(84)90017-1}.
+\bibitem{clp}
+J. Jaffar and J.-L. Lassez.
+\emph{Constraint Logic Programming}. POPL, 1987.
+\href{https://doi.org/10.1145/41625.41635}{doi:10.1145/41625.41635}.
+\bibitem{attvar}
+SWI-Prolog reference manual.
+\href{https://www.swi-prolog.org/pldoc/man?section=attvar}{Attributed variables}.
+\bibitem{freeze}
+SWI-Prolog reference manual.
+\href{https://www.swi-prolog.org/pldoc/doc_for?object=freeze/2}{\code{freeze/2}}.
+\bibitem{transactions}
+SWI-Prolog reference manual.
+\href{https://www.swi-prolog.org/pldoc/man?section=transaction-impact}{Impact of transactions}.
+\bibitem{lean}
+MeTTapedia. \emph{ConstraintTypes} and \emph{PeTTa.RuntimeTyping}.
+\href{https://github.com/godelclaw/MeTTapedia}{Source repository};
+the local development includes revisions \code{7e397154e6} and
+\code{63cddbdaa9}. Native conformance is not claimed.
+\end{thebibliography}
+\end{document}
+

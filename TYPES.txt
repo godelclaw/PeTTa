@@ -11,10 +11,10 @@ membership uses the declarations visible when the result is checked. Unknown
 value leaves acquire their evidence when they bind. No reflective get-type
 query is involved in enforcement.
 
-The three implementation units are:
+The four implementation units are:
 
-  types.pl              declaration indexes, boundaries, shared type solving,
-                        argument modes, and definition-lifecycle integration
+  types.pl              declaration indexes, evidence and shared type solving
+  type_compilation.pl   checked entries, argument plans and lifecycle integration
   type_membership.pl    direct membership clauses for ground type expressions
   type_obligations.pl   one native attribute and evidence cell per open value
 
@@ -71,9 +71,11 @@ These are syntactic function-slot observations. Inside a type, including a
 constructor field, Atom is the type of every value: (ListOf Atom) holds every
 list and (TupleOf Number Atom) every two-element list starting with a number.
 A declaration (: x Atom) therefore says nothing and is no type evidence: a
-value's own evidence never gives it the type Atom, which reaches a parameter
-only through an explicit index such as (List Atom). Holding is decided by the
-literal slot, so a parameter gains no holding power either way. A declared
+value's own evidence never gives it the type Atom. A shared signature parameter
+cannot acquire the unrestricted checking marker, even through an explicit
+index or inside a compound witness. Otherwise one argument could erase the
+requirements on another, and checking order would change the answer. Holding
+is decided by the literal slot, not by inferred parameters. A declared
 family has no known variance, so (List Atom) holds the lists built at index
 Atom, not a value declared (List Number). The other mode words are ordinary
 value-type names inside a type. _ and %Undefined% stand for a whole slot;
@@ -248,3 +250,16 @@ this implementation does not yet provide incremental solving for every formula.
 The protected structural fragment described above is the implemented exception.
 See TYPING-REVIEW.txt for measured comparisons, compatibility cases and the
 boundary between the generic Lean model and this native implementation.
+
+Review and mathematical note
+----------------------------
+
+docs/runtime-types.tex and its four-page PDF explain the membership judgments,
+proper witnesses versus checking patterns, staged evidence, and native hooks.
+The references identify the logical-programming foundations and the precise
+limits of the Lean correspondence. Run make -C docs to rebuild the PDF.
+
+The compiler/runtime source split preserves clause bodies and their order
+within each predicate. The runtime frame and attribute layouts are documented
+at the top of their implementation units; generated predicates keep the
+existing module and name interface.
