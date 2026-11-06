@@ -147,16 +147,15 @@ type_formula(V,T,has(E,T)) :- type_capture(V,E).
 
 % Evidence records the clauses entered for known structure. An unknown leaf
 % records its own later lookup; no full declaration environment is retained.
-type_capture(V,open(V,Cell)) :- var(V),!,type_obligations:cell(V,Cell).
-type_capture(V,primitive(V,Rows,'Number')) :- number(V),!,type_annotations(V,Rows).
-type_capture(V,primitive(V,Rows,'String')) :- string(V),!,type_annotations(V,Rows).
-type_capture(V,primitive(V,Rows,'Bool')) :- (V==true;V==false),!,type_annotations(V,Rows).
+type_capture(V,E) :- var(V),!,E=open(V,Cell),type_obligations:cell(V,Cell).
 type_capture(V,E) :- type_annotations(V,Rows),
-    (V==[] -> E=nil([],Rows)
-    ;atom(V) -> E=atom(V,Rows)
-    ;V=[H|Tail] -> type_capture(H,HE),type_capture(Tail,TE),
+    (V=[H|Tail] -> type_capture(H,HE),type_capture(Tail,TE),
         ((var(H);atom(H),arg(2,HE,[_|_]))->type_constructors(H,Ctors);Ctors=[]),
         E=cons(V,Rows,Ctors,HE,TE)
+    ;atom(V) -> ((V==true;V==false) -> E=primitive(V,Rows,'Bool');E=atom(V,Rows))
+    ;number(V) -> E=primitive(V,Rows,'Number')
+    ;string(V) -> E=primitive(V,Rows,'String')
+    ;V==[] -> E=nil([],Rows)
     ;V=partial(F,Bound),atom(F),is_list(Bound) -> type_capture(Bound,BE),length(Bound,N),
         findall(Used-[->|Later],(type_partial_schema(F,N,Ts),
             length(Used,N),append(Used,Rest,Ts),Rest\==[],type_curried(Rest,Later)),Schemes),
