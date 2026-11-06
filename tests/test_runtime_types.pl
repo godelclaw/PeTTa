@@ -418,6 +418,13 @@ test(a_nested_checking_pattern_is_not_an_inferred_witness) :-
       !(collapse (rt_wide_same (1 \"s\") rt_wide_list))
       !(collapse (rt_wide_same rt_wide_list rt_wide_list))",R),
     assertion(R == [[],[],[7]]).
+test(a_parameter_used_once_inside_a_family_still_excludes_atom) :-
+    program("(: rt_any_items (rt_Items Atom)) (: rt_num_items (rt_Items Number))
+      (: rt_items_some (-> (rt_Items $a) Number)) (= (rt_items_some $x) 7)
+      (: rt_items_any (-> (rt_Items Atom) Number)) (= (rt_items_any $x) 7)
+      !(collapse (rt_items_some rt_any_items)) !(collapse (rt_items_some rt_num_items))
+      !(collapse (rt_items_any rt_any_items)) !(collapse (rt_items_any rt_num_items))",R),
+    assertion(R == [[],[7],[7],[]]).
 test(an_inner_call_keeps_checking_an_input_watched_by_its_caller) :-
     program("(: rt_in1 (-> $b $b)) (= (rt_in1 $x) 1)
       (: rt_in2 (-> $b $b)) (= (rt_in2 $x) (let $x \"s\" 1))

@@ -71,16 +71,18 @@ These are syntactic function-slot observations. Inside a type, including a
 constructor field, Atom is the type of every value: (ListOf Atom) holds every
 list and (TupleOf Number Atom) every two-element list starting with a number.
 A declaration (: x Atom) therefore says nothing and is no type evidence: a
-value's own evidence never gives it the type Atom. A shared signature parameter
-cannot acquire the unrestricted checking marker, even through an explicit
-index or inside a compound witness. Otherwise one argument could erase the
-requirements on another, and checking order would change the answer. Holding
-is decided by the literal slot, not by inferred parameters. A declared
-family has no known variance, so (List Atom) holds the lists built at index
-Atom, not a value declared (List Number). The other mode words are ordinary
-value-type names inside a type. _ and %Undefined% stand for a whole slot;
-inside a type they are not types, and a parameter such as $t names some type
-there. Arrow interface descriptions retain their slot annotations.
+value's own evidence never gives it the type Atom. A signature parameter never
+stands for a type that mentions Atom, whether it occurs once or several times,
+at top level or inside a compound type. Otherwise Atom would solve every shared
+parameter, one argument could erase the requirements on another, and checking
+order would change the answer. Holding is decided by the literal slot, not by
+inferred parameters. A declared family has no known variance, so (List Atom)
+holds the lists built at index Atom, not a value declared (List Number). A
+value declared (List Atom) meets (List Atom) but not (List $a). The other mode
+words are ordinary value-type names inside a type. _ and %Undefined% stand for
+a whole slot; inside a type they admit nothing. Write Atom there for any value,
+or a parameter for one shared proper type. Arrow interface descriptions retain
+their slot annotations.
 
 A check that only requires a value to have some type checks nothing, because
 every finite value has a canonical type: a primitive, Symbol or declared

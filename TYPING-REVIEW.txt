@@ -27,6 +27,8 @@ Mixed Number->Atom / String->Number,
   body (+ 1 2), input "s"                  ()                  (3)
 Hidden open input of an uninhabited type   (7)                 (7)
 (ListOf Atom) input on (1 "a" foo)         ()                  (7)
+(List $a) input on a value declared
+  (List Atom)                              (7)                 ()
 
 The mixed case uses the draft's explicit unanimity policy: only unanimous Atom
 positions hold or quote. That policy and the separation of reflection from
@@ -82,20 +84,22 @@ ListOf suffix obtained with cdr-atom. Other inputs/results remain checked;
 contract edits retire the private entry. Arbitrary nominal families and shared
 overloads do not gain these structural assumptions.
 
-The four core files total 763 lines, including layout and invariant comments. The optimizations are separate commits,
-so their generated-code transformations can be reviewed independently.
+The four core files total 763 lines, including layout and invariant comments.
+The optimizations are separate commits, so their generated-code
+transformations can be reviewed independently.
 
 Atom in a function slot is an evaluation convention. Inside a type, including
 a constructor field, Atom is the type of every value, so (ListOf Atom) holds
-every list; a declaration (: x Atom) is no type evidence. Shared signature parameters cannot
-become checking wildcards, including through a nominal index or inside a
-compound witness. A regression checks both argument orders and a constructor
-whose repeated indices must stay equal. A declared family
-has no known variance: (List Atom) holds the lists built at index Atom, not a
-value declared (List Number). _ and %Undefined% stand for a whole slot only;
-inside a type, a parameter such as $t names some type. The other mode words
-are ordinary value-type names inside a type. Function types are compared as
-written.
+every list; a declaration (: x Atom) is no type evidence. No signature
+parameter stands for a type that mentions Atom, including through a nominal
+index or inside a compound type. A regression checks both argument orders and
+a constructor whose repeated indices must stay equal. A declared family has no
+known variance: (List Atom) holds the lists built at index Atom, not a value
+declared (List Number), and a value declared (List Atom) does not meet
+(List $a). _ and %Undefined% stand for a whole slot only; inside a type, write
+Atom for any value or a parameter for one shared proper type. The other mode
+words are ordinary value-type names inside a type. Function types are compared
+as written.
 
 Unrestricted slots do not inspect cyclic host terms. Structural checks reject
 cycles. Finite-tree proofs do not establish behavior on rational trees.
