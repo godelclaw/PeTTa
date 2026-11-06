@@ -69,7 +69,8 @@ types_enter(Schemas, Args, Frame) :- acyclic_term(Args),
 type_arm_option(Frame,option(_,_,Form)) :- type_arm(Frame,Form).
 type_input_options([],_,[]).
 type_input_options([Schema|Schemas],Args,Options) :-
-    ( append(Input,[Result],Schema), maplist(type_slot,Input,Args,Types)
+    ( append(Input,[Result],Schema), term_variables(Schema,Parameters),
+      maplist(type_witness,Parameters), maplist(type_slot,Input,Args,Types)
       -> (type_mode(Result) -> Mode=mode(Result),Out='$any'(true);Mode=value,type_normalize(Result,Out)),
          type_input_formulas(Args,Types,Out,Types,Form),Options=[option(Mode,Out,Form)|Rest]
     ; Options=Rest ),type_input_options(Schemas,Args,Rest).
@@ -223,6 +224,13 @@ type_slot_kinds([T|Ts]) :- type_slot_kind(T),type_slot_kinds(Ts).
 type_slot_kind(T) :- (T=='%Undefined%';T=='_'),!.
 type_slot_kind(T) :- type_kind(T).
 
+% Signature parameters denote proper witnesses, never a checking wildcard.
+% Keep this obligation on nested variables too: a later nominal index must
+% not turn an earlier shared requirement into an unrestricted check.
+type_witness(T) :- var(T),!,freeze(T,type_witness(T)).
+type_witness(T) :- T\=='$any'(true),
+    (is_list(T)->maplist(type_witness,T);true).
+
 % Data constructors have a named result family. Predefined representation
 % types use their native formation rules; declarations are not casts to them.
 type_nominal_result(T) :- nonvar(T),T\==[],
@@ -241,6 +249,8 @@ type_evidence_branch(E,T,P,R) :- arg(1,E,Value),arg(2,E,Rows),member(Pattern-Typ
     copy_term_nat(Pattern-Type,A-Declared),type_normalize(Declared,U),type_kind(U),unify_with_occurs_check(T,U),
     type_pattern_match(A,Value,P,R).
 type_evidence_branch(atom(_,[]),'Symbol',P,P).
+type_evidence_branch(atom(_,Rows),'Symbol',P,P) :- Rows=[_|_],
+    \+ (member(_-Declared,Rows),type_normalize(Declared,T),type_witness(T)).
 type_evidence_branch(cons(Value,_,Ctors,_,Tail),T,P,R) :-
     member(Scheme,Ctors),copy_term_nat(Scheme,ctor(F,Fields,Out)),type_kind(Out),Value=[Head|_],
     (var(Head)->P=[pattern(F,Head)|Q];Head==F,P=Q),
@@ -298,6 +308,7 @@ type_free_parameter(T) :- var(T),
     (get_attrs(T,Attrs)->Attrs=att(freeze,Goals,[]),type_kind_goals(Goals,T);true).
 type_kind_goals('$and'(A,B),T) :- !,type_kind_goals(A,T),type_kind_goals(B,T).
 type_kind_goals(user:type_kind(U),T) :- U==T.
+type_kind_goals(user:type_witness(U),T) :- U==T.
 type_requests([],[],[],[]).
 type_requests([need(V,T)|Rest],[need(V,T)|Needs],Ps,Vs) :- type_requests(Rest,Needs,Ps,Vs).
 type_requests([pattern(P,V)|Rest],Needs,[P|Ps],[V|Vs]) :- type_requests(Rest,Needs,Ps,Vs).

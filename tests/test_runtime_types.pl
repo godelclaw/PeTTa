@@ -401,6 +401,23 @@ test(an_atom_declaration_is_no_type_evidence) :-
     program("(: rt_top_sym Atom) (: rt_same_t (-> $a $a Bool)) (= (rt_same_t $x $y) True)
       !(collapse (rt_same_t rt_top_sym 1)) !(collapse (rt_same_t rt_top_sym foo))",R),
     assertion(R == [[],[true]]).
+test(an_explicit_atom_index_cannot_waive_a_shared_parameter) :-
+    program("(: rt_wide_index (rt_Index Atom Atom))
+      (: rt_index_first (-> (rt_Index $a $a) $a $a Bool)) (= (rt_index_first $p $x $y) True)
+      (: rt_index_last (-> $a $a (rt_Index $a $a) Bool)) (= (rt_index_last $x $y $p) True)
+      (: rt_index_mk (-> $a (rt_Correlated $a $a)))
+      (: rt_index_check (-> (rt_Correlated $a Atom) $a Bool)) (= (rt_index_check $p $x) True)
+      !(collapse (rt_index_first rt_wide_index 1 \"s\"))
+      !(collapse (rt_index_last 1 \"s\" rt_wide_index))
+      !(collapse (rt_index_check (rt_index_mk 1) \"s\"))",R),
+    assertion(R == [[],[],[]]).
+test(a_nested_checking_pattern_is_not_an_inferred_witness) :-
+    program("(: rt_wide_list (rt_IndexList Atom))
+      (: rt_wide_same (-> $a $a Number)) (= (rt_wide_same $x $y) 7)
+      !(collapse (rt_wide_same rt_wide_list (1 \"s\")))
+      !(collapse (rt_wide_same (1 \"s\") rt_wide_list))
+      !(collapse (rt_wide_same rt_wide_list rt_wide_list))",R),
+    assertion(R == [[],[],[7]]).
 test(an_inner_call_keeps_checking_an_input_watched_by_its_caller) :-
     program("(: rt_in1 (-> $b $b)) (= (rt_in1 $x) 1)
       (: rt_in2 (-> $b $b)) (= (rt_in2 $x) (let $x \"s\" 1))
