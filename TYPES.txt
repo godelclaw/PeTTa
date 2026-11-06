@@ -257,11 +257,10 @@ Review and mathematical note
 ----------------------------
 
 docs/runtime-types.tex and its four-page PDF explain the membership judgments,
-proper witnesses versus checking patterns, staged evidence, and native hooks.
-The references identify the logical-programming foundations and the precise
-limits of the Lean correspondence. Run make -C docs to rebuild the PDF.
+the reading of Atom and of type parameters, staged evidence, the generated
+code, and the limits of the Lean correspondence. Run make -C docs to rebuild
+the PDF.
 
-The compiler/runtime source split preserves clause bodies and their order
-within each predicate. The runtime frame and attribute layouts are documented
-at the top of their implementation units; generated predicates keep the
-existing module and name interface.
+The runtime frame and attribute layouts are documented at the top of their
+implementation units; generated predicates keep the existing module and name
+interface.

@@ -190,16 +190,10 @@ of production acceptance. The remaining performance and policy differences
 above are part of the review, rather than hidden prerequisites.
 
 
-Paper and incorporation
------------------------
+Note
+----
 
-docs/runtime-types.pdf is the short mathematical note; its LaTeX source and
-Makefile are alongside it. The note distinguishes specified judgments, generic
-Lean laws and native implementation obligations. It makes no production or
-full compiler-verification claim.
-
-The latest pass has separate commits for a shared-witness correctness repair,
-a semantics-preserving compiler/runtime source split, and this documentation.
-The new type_compilation.pl is loaded by types.pl; existing src packaging
-already includes it. No changes to the canonical fixed branches are required
-to review or test this separate candidate.
+docs/runtime-types.pdf is a four-page account of the judgments, the reading of
+Atom and of type parameters, the generated code, the Lean results and the
+measurements. Its LaTeX source and Makefile are alongside it; make -C docs
+rebuilds it. It makes no production or compiler-verification claim.
