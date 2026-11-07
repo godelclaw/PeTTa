@@ -1,3 +1,6 @@
+:- use_module(library(nb_set), [empty_nb_set/1, add_nb_set/3]).
+:- use_module(library(terms), [term_factorized/3]).
+
 %Pattern matching, structural and functional/relational constraints on arguments:
 constrain_args(X, X, []) :- (var(X); atomic(X)), !.
 constrain_args([F, A, B], Out, Goals) :- nonvar(F),
@@ -348,10 +351,8 @@ translate_expr([H0|T0], Goals, Out) :-
                     Arity is InputArity + 1,
                     ( incomplete_application_kind(Fun, Arity, ApplicationKind), ApplicationKind == overapplied
                       -> append(GsH, [throw_function_overapplication(Fun, InputArity)], Goals)
-                       ; maplist({Fun,T,GsH,IsPartial,Bound,Out}/[TypeChain,BranchGoal]>>(
-                                 typed_functioncall_branch(Fun, TypeChain, T, GsH, IsPartial, Bound, Out, BranchGoal)), UniqueTypeChains, Branches),
-                         disj_list(Branches, Disj),
-                         Goals = [Disj] )
+                       ; typed_functioncall(Fun, UniqueTypeChains, T, GsH, IsPartial, Bound, Out, Goal),
+                         Goals = [Goal] )
               ; build_call_or_partial(Fun, AllAVs, Out, Inner, [], Goals))
           %Literals (numbers, strings, etc.), known non-function atom => data:
           ; ( atomic(HV), \+ atom(HV) ; atom(HV), \+ fun(HV) ) -> note_symbol_head(HV),
@@ -376,6 +377,177 @@ build_call_or_partial(Fun, AVs, Out, Inner, Extra, Goals) :- length(AVs, N),
                                                                 ; append(Inner, [throw_function_overapplication(Fun, N)], Goals)
                                                              ).
 
+%A typed call runs its body once for each tuple of argument values: the declarations
+%decide whether it runs and which results it keeps, but never multiply them.
+%One declaration without type variables keeps the direct translation:
+typed_functioncall(Fun, [TypeChain], T, GsH, IsPartial, Bound, Out, Goal) :-
+    ground(TypeChain), !,
+    typed_functioncall_branch(Fun, TypeChain, T, GsH, IsPartial, Bound, Out, Goal).
+%Otherwise each argument is evaluated once and checked at that point, carrying the
+%surviving declarations and type-variable bindings forward to the call and output check:
+typed_functioncall(Fun, TypeChains, T, GsH, IsPartial, Bound, Out, Goal) :-
+    maplist(initial_type_chain, TypeChains, Chains0),
+    ( ground(TypeChains) -> GroundChains = true ; GroundChains = false ),
+    ( IsPartial -> Seen0 = Bound ; Seen0 = [] ),
+    translate_args_chain(T, 0, GroundChains, Chains0, Chains0, Seen0, SeenFinal, GsT, AVs0, FinalChains),
+    ( IsPartial -> append(Bound, AVs0, AVs) ; AVs = AVs0 ),
+    append(GsH, GsT, Inner),
+    ( forall(member(chain(_, OutSpec), Chains0), unchecked_spec(OutSpec))
+      -> Extra = []
+       ; Extra = [output_chains_accept(Out, SeenFinal, FinalChains)] ),
+    build_call_or_partial(Fun, AVs, Out, Inner, Extra, GoalsList),
+    goals_list_to_conj(GoalsList, Goal).
+
+initial_type_chain([->|Xs], chain(ArgSpecs, OutSpec)) :-
+    append(ArgTypes, [OutType], Xs),
+    maplist(type_spec, ArgTypes, ArgSpecs),
+    type_spec(OutType, OutSpec).
+
+type_spec(T, atom) :- T == 'Atom', !.
+type_spec(T, unchecked) :- ( T == '%Undefined%' ; T == '_' ), !.
+type_spec(T, checked(T)).
+
+unchecked_spec(atom).
+unchecked_spec(unchecked).
+
+%Each argument is evaluated once and steps the surviving declaration chains in place:
+translate_args_chain([], _, _, _, Chains, Seen, Seen, [], [], Chains).
+translate_args_chain([A|As], I, GroundChains, Chains0, InChains, Seen0, SeenFinal, Gs, [AV|AVs], OutChains) :-
+    ( forall(member(chain(ArgSpecs, _), Chains0), ( nth0(I, ArgSpecs, Spec), Spec == atom ))
+      -> AV = A, GsA = []
+       ; translate_expr(A, GsA, AV) ),
+    ( Seen0 == [] -> Seen1 = AV ; Seen1 = [AV|Seen0] ),
+    ( GroundChains == true
+      -> StepGoal = step_ground_type_chains(AV, Seen1, InChains, NextChains)
+       ; StepGoal = step_type_chains(AV, Seen1, InChains, NextChains) ),
+    I1 is I + 1,
+    translate_args_chain(As, I1, GroundChains, Chains0, NextChains, Seen1, SeenFinal, GsRest, AVs, OutChains),
+    append(GsA, [StepGoal|GsRest], Gs).
+
+step_ground_type_chains(AV, SeenAVs, Chains, NextChains) :-
+    ground(SeenAVs), !,
+    filter_ground_chains(Chains, AV, NextChains),
+    NextChains = [_|_].
+step_ground_type_chains(AV, SeenAVs, Chains, NextChains) :-
+    step_open_type_chains(AV, SeenAVs, Chains, NextChains).
+
+step_type_chains(AV, SeenAVs, Chains, NextChains) :-
+    ground(SeenAVs), ground(Chains), !,
+    filter_ground_chains(Chains, AV, NextChains),
+    NextChains = [_|_].
+step_type_chains(AV, SeenAVs, Chains, NextChains) :-
+    ground(SeenAVs), !,
+    findall(chain(Specs, OutSpec),
+            ( member(chain([Spec|Specs], OutSpec), Chains),
+              value_type_matches(AV, Spec) ),
+            NextChains0),
+    NextChains0 = [_|_],
+    unique_chains(SeenAVs, NextChains0, NextChains).
+step_type_chains(AV, SeenAVs, Chains, NextChains) :-
+    step_open_type_chains(AV, SeenAVs, Chains, NextChains).
+
+step_open_type_chains(AV, SeenAVs, Chains, NextChains) :-
+    findall(SeenAVs-chain(Specs, OutSpec),
+            ( member(chain([Spec|Specs], OutSpec), Chains),
+              value_type_matches(AV, Spec) ),
+            Pairs),
+    group_arg_chains(Pairs, SeenAVs, NextChains0),
+    unique_chains(SeenAVs, NextChains0, NextChains).
+
+filter_ground_chains([], _, []).
+filter_ground_chains([chain([Spec|Specs], OutSpec)|Chains], AV, Next) :-
+    ( value_type_matches(AV, Spec)
+      -> Next = [chain(Specs, OutSpec)|Rest]
+       ; Next = Rest ),
+    filter_ground_chains(Chains, AV, Rest).
+
+group_arg_chains([AV-Chain], AV, [Chain]) :- !.
+group_arg_chains(Pairs, AV, Chains) :-
+    Pairs = [_|_],
+    length(Pairs, Len),
+    Cap is max(4, Len),
+    '$filled_array'(Buckets, buckets, Cap, []),
+    collect_arg_groups(Pairs, Cap, Buckets, Groups),
+    emit_arg_groups(Groups, AV, Chains).
+
+collect_arg_groups([], _, _, []).
+collect_arg_groups([AV0-Chain|Pairs], Cap, Buckets, Groups) :-
+    variant_key_hash(AV0, Hash),
+    Idx is (Hash mod Cap) + 1,
+    arg(Idx, Buckets, Bucket),
+    ( find_arg_group(Bucket, AV0, Group)
+      -> arg(3, Group, Prev),
+         setarg(3, Group, [AV0-Chain|Prev]),
+         collect_arg_groups(Pairs, Cap, Buckets, Groups)
+       ; Group = group(AV0, Chain, []),
+         setarg(Idx, Buckets, [Group|Bucket]),
+         Groups = [Group|RestGroups],
+         collect_arg_groups(Pairs, Cap, Buckets, RestGroups) ).
+
+find_arg_group([Group|_], AV0, Group) :-
+    arg(1, Group, RepAV),
+    AV0 =@= RepAV, !.
+find_arg_group([_|Bucket], AV0, Group) :-
+    find_arg_group(Bucket, AV0, Group).
+
+emit_arg_groups([group(AV0, Chain, RevSame)], AV, [Chain|Same]) :- !,
+    AV = AV0,
+    bind_rev_arg_chains(RevSame, AV, [], Same).
+emit_arg_groups([group(AV0, Chain, RevSame)|Groups], AV, Chains) :-
+    ( AV = AV0,
+      bind_rev_arg_chains(RevSame, AV, [], Same),
+      Chains = [Chain|Same]
+    ; emit_arg_groups(Groups, AV, Chains) ).
+
+bind_rev_arg_chains([], _, Chains, Chains).
+bind_rev_arg_chains([AV-Chain|Pairs], AV, Acc, Chains) :-
+    bind_rev_arg_chains(Pairs, AV, [Chain|Acc], Chains).
+
+variant_key_hash(Key, Hash) :-
+    ( acyclic_term(Key)
+      -> variant_hash(Key, Hash)
+       ; term_factorized(Key, Skeleton, Substitution),
+         variant_hash(Skeleton+Substitution, Hash) ).
+
+unique_chains(_, [], []) :- !.
+unique_chains(_, [C], [C]) :- !.
+unique_chains(Context, Chains, Unique) :-
+    empty_nb_set(Seen),
+    keep_unique_chains(Chains, Context, Seen, Unique).
+
+keep_unique_chains([], _, _, []).
+keep_unique_chains([C|Cs], Context, Seen, Unique) :-
+    add_nb_set(Context-C, Seen, New),
+    ( New == true -> Unique = [C|Rest] ; Unique = Rest ),
+    keep_unique_chains(Cs, Context, Seen, Rest).
+
+output_chains_accept(Out, SeenAVs, Chains) :-
+    ( ground(Out), ground(SeenAVs)
+      -> ( member(chain(_, OutSpec), Chains),
+           value_type_matches(Out, OutSpec) -> true )
+       ; OutAVs = Out-SeenAVs,
+         findall(OutAVs,
+                 ( member(chain(_, OutSpec), Chains),
+                   value_type_matches(Out, OutSpec) ),
+                 OutAVs0),
+         unique_chains([], OutAVs0, UniqueOutAVs),
+         member(OutAVs, UniqueOutAVs) ).
+
+value_type_matches(_, atom) :- !.
+value_type_matches(_, unchecked) :- !.
+value_type_matches(V, checked(T)) :-
+    ( ground(V), ground(T)
+      -> ('get-type'(V, T) -> true ; 'get-metatype'(V, T))
+       ; ('get-type'(V, T) *-> true ; 'get-metatype'(V, T)) ).
+
+ground_type_check(V, T, (ground(V) -> ('get-type'(V, T) -> true ; 'get-metatype'(V, T))
+                                    ; unique_type_match(V, T))).
+
+unique_type_match(V, T) :-
+    findall(V, ('get-type'(V, T) *-> true ; 'get-metatype'(V, T)), Vs0),
+    unique_chains([], Vs0, Vs),
+    member(V, Vs).
+
 %Type function call generation, returns function call plus typechecks for input and output:
 typed_functioncall_branch(Fun, TypeChain, T, GsH, IsPartial, Bound, Out, BranchGoal) :-
     TypeChain = [->|Xs],
@@ -384,7 +556,9 @@ typed_functioncall_branch(Fun, TypeChain, T, GsH, IsPartial, Bound, Out, BranchG
     ( IsPartial -> append(Bound, AVsTmp0, AVsTmp) ; AVsTmp = AVsTmp0 ),
     append(GsH, GsT2, InnerTmp),
     ( (OutType == '%Undefined%' ; OutType == '_' ; OutType == 'Atom')
-       -> Extra = [] ; Extra = [('get-type'(Out, OutType) *-> true ; 'get-metatype'(Out, OutType))] ),
+       -> Extra = []
+     ; ground(OutType) -> ground_type_check(Out, OutType, OutCheck), Extra = [OutCheck]
+     ; Extra = [('get-type'(Out, OutType) *-> true ; 'get-metatype'(Out, OutType))] ),
     build_call_or_partial(Fun, AVsTmp, Out, InnerTmp, Extra, GoalsList),
     goals_list_to_conj(GoalsList, BranchGoal).
 
@@ -396,6 +570,9 @@ translate_args_by_type([A|As], [T|Ts], GsOut, [AV|AVs]) :-
                                            ; translate_expr(A, GsA1, AV),
                                              ( (T == '%Undefined%' ; T == '_')
                                                -> GsA = GsA1
+                                                ; ground(T)
+                                               -> ground_type_check(AV, T, ArgCheck),
+                                                  append(GsA1, [ArgCheck], GsA)
                                                 ; append(GsA1, [('get-type'(AV, T) *-> true ; 'get-metatype'(AV, T))], GsA))),
                                              translate_args_by_type(As, Ts, GsRest, AVs),
                                              append(GsA, GsRest, GsOut).
