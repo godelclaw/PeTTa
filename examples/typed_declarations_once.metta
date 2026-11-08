@@ -104,3 +104,29 @@
 ; Repeated input-only overloaded calls on the same open variables coalesce equivalent obligations.
 !(test (let $x $f1 (let $y $f2 (let $_ (pair-same $x $y) (let $r (pair-same $x $y) (let $x 1 (let $y 2 $r)))))) ok)
 !(test (let (Error $_ $kind) (catch (let $x $f1 (let $y $f2 (let $_ (pair-same $x $y) (let $r (pair-same $x $y) (let $x 1 (let $y "bad" $r))))))) $kind) typecheck)
+
+; Polymorphic and overloaded calls can be completed in several argument groups.
+(: partial-same (-> $a $a Bool))
+(= (partial-same $x $y) True)
+!(test ((partial-same 1) 2) True)
+!(test (((partial-same) 1) 2) True)
+(: partial-pick (-> Number String Number))
+(: partial-pick (-> String Number String))
+(= (partial-pick $x $y) $x)
+!(test ((partial-pick 7) "ok") 7)
+(: partial-three-same (-> $a $a $a Bool))
+(= (partial-three-same $x $y $z) True)
+!(test (((partial-three-same 1) 2) 3) True)
+
+; Captured expressions and the completed body each run once.
+(= (partial-arg-once)
+   (let $n (get-state &partial-arg-count)
+      (let $_ (change-state! &partial-arg-count (+ $n 1)) 4)))
+!(test (change-state! &partial-arg-count 0) True)
+!(test ((partial-same (partial-arg-once)) 4) True)
+!(test (get-state &partial-arg-count) 1)
+(: partial-pick-effect (-> Number String Number))
+(: partial-pick-effect (-> String Number String))
+(= (partial-pick-effect $x $y) (let $_ (add-atom &partial-pick-effects ran) $x))
+!(test ((partial-pick-effect 7) "ok") 7)
+!(test (collapse (match &partial-pick-effects ran counted)) (counted))
