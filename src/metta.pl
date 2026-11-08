@@ -321,7 +321,7 @@ eval(C, Out) :- translate_expr(C, Goals, Out),
                 call_goals(Goals).
 
 call_goals([]).
-call_goals([G|Gs]) :- call(G), 
+call_goals([G|Gs]) :- call(G),
                       call_goals(Gs).
 
 %%% Higher-Order Functions: %%%
