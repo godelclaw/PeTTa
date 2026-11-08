@@ -14,8 +14,10 @@ bind_pairs([], _, []).
 bind_pairs([AV-C|Ps], AV, [C|Cs]) :- bind_pairs(Ps, AV, Cs).
 
 check_groups(Pairs) :-
-    findall(AV-Cs, reference_group(Pairs, AV, Cs), Expected),
-    findall(AV-Cs, user:group_arg_chains(Pairs, AV, Cs), Actual),
+    copy_term_nat(Pairs, ReferencePairs),
+    copy_term_nat(Pairs, ActualPairs),
+    findall(AV-Cs, reference_group(ReferencePairs, AV, Cs), Expected),
+    findall(AV-Cs, user:group_arg_chains(ActualPairs, AV, Cs), Actual),
     assertion(Actual =@= Expected).
 
 test(group_order_and_duplicate_keys) :-
