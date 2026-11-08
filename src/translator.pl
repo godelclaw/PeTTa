@@ -1,5 +1,6 @@
 :- use_module(library(nb_set), [empty_nb_set/1, add_nb_set/3]).
 :- use_module(library(terms), [term_factorized/3]).
+:- use_module(library(pairs), [group_pairs_by_key/2, pairs_values/2]).
 
 %Pattern matching, structural and functional/relational constraints on arguments:
 constrain_args(X, X, []) :- (var(X); atomic(X)), !.
@@ -464,44 +465,34 @@ filter_ground_chains([chain([Spec|Specs], OutSpec)|Chains], AV, Next) :-
 group_arg_chains([AV-Chain], AV, [Chain]) :- !.
 group_arg_chains(Pairs, AV, Chains) :-
     Pairs = [_|_],
-    length(Pairs, Len),
-    Cap is max(4, Len),
-    '$filled_array'(Buckets, buckets, Cap, []),
-    collect_arg_groups(Pairs, Cap, Buckets, Groups),
-    emit_arg_groups(Groups, AV, Chains).
+    key_arg_pairs(Pairs, 0, Keyed),
+    ordered_arg_groups(Keyed, Groups),
+    member(_-Group, Groups),
+    bind_arg_chains(Group, AV, Chains).
 
-collect_arg_groups([], _, _, []).
-collect_arg_groups([AV0-Chain|Pairs], Cap, Buckets, Groups) :-
-    variant_key_hash(AV0, Hash),
-    Idx is (Hash mod Cap) + 1,
-    arg(Idx, Buckets, Bucket),
-    ( find_arg_group(Bucket, AV0, Group)
-      -> arg(3, Group, Prev),
-         setarg(3, Group, [AV0-Chain|Prev]),
-         collect_arg_groups(Pairs, Cap, Buckets, Groups)
-       ; Group = group(AV0, Chain, []),
-         setarg(Idx, Buckets, [Group|Bucket]),
-         Groups = [Group|RestGroups],
-         collect_arg_groups(Pairs, Cap, Buckets, RestGroups) ).
+% Hash only the keys; retain the original payloads and restore first-seen
+% order after grouping. Exact variant checks separate any hash collisions.
+key_arg_pairs([], _, []).
+key_arg_pairs([AV-Chain|Pairs], I, [Hash-(I-(AV-Chain))|Keyed]) :-
+    variant_key_hash(AV, Hash), J is I+1,
+    key_arg_pairs(Pairs, J, Keyed).
 
-find_arg_group([Group|_], AV0, Group) :-
-    arg(1, Group, RepAV),
-    AV0 =@= RepAV, !.
-find_arg_group([_|Bucket], AV0, Group) :-
-    find_arg_group(Bucket, AV0, Group).
+ordered_arg_groups(Keyed, Groups) :-
+    keysort(Keyed, Sorted), group_pairs_by_key(Sorted, Buckets),
+    maplist(arg_bucket_groups, Buckets, GroupLists), append(GroupLists, Unordered),
+    keysort(Unordered, Groups).
 
-emit_arg_groups([group(AV0, Chain, RevSame)], AV, [Chain|Same]) :- !,
-    AV = AV0,
-    bind_rev_arg_chains(RevSame, AV, [], Same).
-emit_arg_groups([group(AV0, Chain, RevSame)|Groups], AV, Chains) :-
-    ( AV = AV0,
-      bind_rev_arg_chains(RevSame, AV, [], Same),
-      Chains = [Chain|Same]
-    ; emit_arg_groups(Groups, AV, Chains) ).
+arg_bucket_groups(_-[], []) :- !.
+arg_bucket_groups(Hash-[I-(AV-Chain)|Pairs], [I-[AV-Chain|Same]|Groups]) :-
+    partition(same_arg_variant(AV), Pairs, Matches, Rest),
+    pairs_values(Matches, Same),
+    arg_bucket_groups(Hash-Rest, Groups).
 
-bind_rev_arg_chains([], _, Chains, Chains).
-bind_rev_arg_chains([AV-Chain|Pairs], AV, Acc, Chains) :-
-    bind_rev_arg_chains(Pairs, AV, [Chain|Acc], Chains).
+same_arg_variant(AV, _-(Other-_)) :- AV =@= Other.
+
+bind_arg_chains([], _, []).
+bind_arg_chains([AV-Chain|Pairs], AV, [Chain|Chains]) :-
+    bind_arg_chains(Pairs, AV, Chains).
 
 variant_key_hash(Key, Hash) :-
     ( acyclic_term(Key)
