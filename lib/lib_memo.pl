@@ -745,7 +745,7 @@ cache_call_cached_ground(Fun, Arity, CurGen, KeyAVs, Out) :-
 cache_call_cached_ground(_, _, _, _, _) :-
     fail.
 
-cache_call_store_ground(Fun, Arity, _, KeyAVs, AVs, Goal, Out) :-
+cache_call_store_ground(Fun, Arity, KeyAVs, AVs, Goal, Out) :-
     _ = Goal,
     % For ground+quantized keys, collisions are intentional. Guarding "in-progress"
     % entries here can cause large duplicate recomputation in recursive workloads
@@ -759,7 +759,7 @@ cache_call_store_ground(Fun, Arity, _, KeyAVs, AVs, Goal, Out) :-
     member(Answer, FinalResults),
     replay_ground_answer(Out, Answer).
 
-cache_call_store_variant(Fun, Arity, _, KeyAVs, AVs, Goal, Out) :-
+cache_call_store_variant(Fun, Arity, KeyAVs, AVs, Goal, Out) :-
     setup_call_cleanup(begin_memo_probe(Fun, Arity, CurGen, Ref),
         cache_call_store_variant_active(Fun, Arity, CurGen, KeyAVs, AVs, Goal, Out),
         end_memo_probe(Fun, Arity, Ref)).
@@ -791,11 +791,11 @@ cache_call(Fun, AVs, Out) :-
         ( ground(AVs)
         -> ( cache_lookup(Fun, Arity, CurGen, KeyAVs, CachedResults)
            -> cache_replay_hit_ground(Fun, Arity, KeyAVs, CachedResults, Out)
-           ; cache_call_store_ground(Fun, Arity, CurGen, KeyAVs, AVs, Goal, Out)
+           ; cache_call_store_ground(Fun, Arity, KeyAVs, AVs, Goal, Out)
            )
         ; ( cache_lookup(Fun, Arity, CurGen, KeyAVs, CachedResults)
           -> cache_replay_hit_variant(Fun, Arity, KeyAVs, CachedResults, AVs, Out)
-          ; cache_call_store_variant(Fun, Arity, CurGen, KeyAVs, AVs, Goal, Out)
+          ; cache_call_store_variant(Fun, Arity, KeyAVs, AVs, Goal, Out)
           )
         )
     ; memo_stat_inc(cache_bypass),
