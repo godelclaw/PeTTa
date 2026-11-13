@@ -1,11 +1,11 @@
 :- dynamic space_primitive/2.
 :- dynamic created_space/1.
 
-% A new empty space is a fresh first-class name, including before any row is
-% added. Never select an existing predicate or a previously returned space.
+% Whitespace keeps generated handles distinct from MeTTa symbol literals.
+% Reserve empty handles too, so resetting gensym cannot reuse a live space.
 'new-space'(Space) :- with_mutex(metta_space_creation, fresh_space_name(Space)).
 
-fresh_space_name(Space) :- gensym('&space_', Candidate),
+fresh_space_name(Space) :- gensym('&space ', Candidate),
     ( ( current_predicate(Candidate/_) ; created_space(Candidate)
       ; space_primitive(Candidate, _) )
       -> fresh_space_name(Space)

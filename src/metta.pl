@@ -251,7 +251,6 @@ get_type_candidate(X, T) :- match('&self', [':',X,T], T, _).
 'get-metatype'(true,  'Grounded') :- !.
 'get-metatype'(false, 'Grounded') :- !.
 'get-metatype'(X, 'Grounded') :- atom(X), fun(X), !.  % e.g., '+' is a registered fun/1
-'get-metatype'(X, 'Grounded') :- atom(X), created_space(X), !.
 'get-metatype'(X, 'Expression') :- is_list(X), !.     % e.g., (+ 1 2), (a b)
 'get-metatype'(X, 'Symbol') :- atom(X), !.            % e.g., a
 
