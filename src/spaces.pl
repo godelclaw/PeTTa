@@ -1,15 +1,14 @@
 :- dynamic space_primitive/2.
-:- dynamic created_space/1.
 
-% Whitespace keeps generated handles distinct from MeTTa symbol literals.
-% Reserve empty handles too, so resetting gensym cannot reuse a live space.
-'new-space'(Space) :- with_mutex(metta_space_creation, fresh_space_name(Space)).
-
-fresh_space_name(Space) :- gensym('&space ', Candidate),
-    ( ( current_predicate(Candidate/_) ; created_space(Candidate)
-      ; space_primitive(Candidate, _) )
-      -> fresh_space_name(Space)
-       ; assertz(created_space(Candidate)), Space = Candidate ).
+% A private atomic counter survives reset_gensym without a per-space registry.
+% Parentheses make compact runtime handles unspellable as symbol literals.
+'new-space'(Space) :- flag('$metta_space_id', Previous, Previous+1),
+                       Next is Previous+1,
+                       format(atom(Candidate), '&space(~d)', [Next]),
+                       ( ( current_predicate(Candidate/_)
+                         ; space_primitive(Candidate, _) )
+                         -> 'new-space'(Space)
+                          ; Space = Candidate ).
 
 %Nonempty expressions keep their indexed rows; other atoms are stored separately.
 %An unbound atom still raises an instantiation error:

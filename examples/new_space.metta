@@ -1,10 +1,16 @@
 ; Occupy a generated name before the first allocation. The allocation must
 ; skip it and also stay separate from a literal name written afterwards.
-!(let $occupied (atom_concat "&space " "1")
+!(let $occupied (atom_concat "&space(" "1)")
    (add-atom $occupied (occupied)))
 !(test (let $space (new-space)
          (let $_ (add-atom &space_1 (user-row))
            (collapse (match $space $row $row)))) ())
+
+; Printed handles are compact and cannot be written as symbol literals.
+!(test (let $space (new-space)
+         (is-member (atom_concat " " "") (atom_chars $space))) False)
+!(test (let $space (new-space)
+         (is-member (atom_concat "(" "") (atom_chars $space))) True)
 
 ; Space handles keep the same metatype and typed-call behavior as &self.
 !(test (let $space (new-space) (is-space $space)) True)
