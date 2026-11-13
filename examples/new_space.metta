@@ -6,7 +6,7 @@
          (let $_ (add-atom &space_1 (user-row))
            (collapse (match $space $row $row)))) ())
 
-; Printed handles are compact and cannot be written as symbol literals.
+; Runtime handle text contains parentheses rather than a literal symbol name.
 !(test (let $space (new-space)
          (is-member (atom_concat " " "") (atom_chars $space))) False)
 !(test (let $space (new-space)

@@ -39,12 +39,29 @@ test(store_survives_atom_gc) :-
     findall(X, user:match(Space,[kept,X],X,X), Rows),
     assertion(Rows == [42]).
 
-test(handle_prints_compactly) :-
+test(handle_text_has_no_literal_spelling) :-
     user:'new-space'(Space),
     user:swrite([wrap,Space,end], Text),
     assertion(\+ sub_string(Text,_,_,_,"&space ")),
     assertion(sub_string(Text,0,_,_,"(wrap &space(")),
     atom_codes(Space, Codes),
     assertion(\+ phrase(user:atom_symbol(_), Codes)).
+
+test(import_only_space_is_not_reused) :-
+    flag('$metta_space_id', Previous, Previous),
+    Next is Previous+1,
+    format(atom(Imported), '&space(~d)', [Next]),
+    source_file(plunit_new_space:handle_atom_count(_), Self),
+    file_directory_name(Self, Dir),
+    directory_file_path(Dir, 'fixtures/new_space/empty.metta', File),
+    setup_call_cleanup(
+        user:'import!'(Imported, File, true),
+        ( assertion(\+ current_predicate(Imported/_)),
+          assertion(\+ user:space_primitive(Imported,_)),
+          assertion(user:metta_import_state(Imported,_,loaded)),
+          user:'new-space'(Fresh),
+          assertion(Fresh \== Imported)
+        ),
+        retractall(user:metta_import_state(Imported,_,_))).
 
 :- end_tests(new_space).

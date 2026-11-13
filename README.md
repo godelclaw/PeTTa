@@ -15,21 +15,6 @@ Example run:
 
 `time sh run.sh ./examples/nars_tuffy.metta`
 
-### Fresh spaces
-
-`(new-space)` returns a fresh space handle, also from a function body.
-Keep it in a variable and pass it to `add-atom`, `match`, or `get-atoms`.
-An empty space is immediately readable. Handles have metatype `Symbol`,
-as do `&self` and named spaces.
-
-Handles print compactly, for example `&space(42)`. They are runtime atoms
-whose printed form is not a `repr`/`parse` round trip. The parentheses
-prevent accidental aliasing by a literal symbol; explicit atom construction
-or Prolog interop can still name the same store. Allocation keeps one process
-counter, independent of `reset_gensym`, with no per-handle registry.
-Unused empty handles can be garbage collected; predicate-backed stores
-retain their data.
-
 ### MORK and FAISS spaces
 
 If MORK and FAISS is installed, execute `sh build.sh` to support MORK-based atom spaces and FAISS-based atom-vector spaces.

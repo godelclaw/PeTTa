@@ -1,12 +1,12 @@
 :- dynamic space_primitive/2.
 
-% A private atomic counter survives reset_gensym without a per-space registry.
-% Parentheses make compact runtime handles unspellable as symbol literals.
+% Allocate from a private counter; parentheses prevent literal-name collisions.
 'new-space'(Space) :- flag('$metta_space_id', Previous, Previous+1),
                        Next is Previous+1,
                        format(atom(Candidate), '&space(~d)', [Next]),
                        ( ( current_predicate(Candidate/_)
-                         ; space_primitive(Candidate, _) )
+                         ; space_primitive(Candidate, _)
+                         ; metta_import_state(Candidate, _, _) )
                          -> 'new-space'(Space)
                           ; Space = Candidate ).
 
