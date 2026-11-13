@@ -159,6 +159,14 @@ space_missing(error(existence_error(procedure, Space/Arity), _), Term) :-
 %Match for conjunctive pattern
 match(_, LComma, OutPattern, Result) :- LComma == [','], !,
                                         Result = OutPattern.
+:- if(predicate_property(db_snapshot_scope(_, _), defined)).
+%All patterns are read in the state of the space at the call (db_snapshot_scope/2):
+match(Space, [Comma|Patterns], OutPattern, Result) :- Comma == ',', !,
+                                                      db_snapshot_scope(Snapshot, match_conjuncts(Patterns, Snapshot, Space, OutPattern)),
+                                                      Result = OutPattern.
+:- else.
+%Without db_snapshot_scope/2, each pattern is read in the state of the space
+%when its read begins:
 match(Space, [Comma|[Head|Tail]], OutPattern, Result) :- Comma == ',', !,
                                                          ( var(Head) -> 'get-atoms'(Space, Head)
                                                          ; is_list(Head), Head = [_|_] -> append([Space], Head, List), Term =.. List,
@@ -166,6 +174,7 @@ match(Space, [Comma|[Head|Tail]], OutPattern, Result) :- Comma == ',', !,
                                                          ; must_be(atom, Space), space_primitive(Space, Head) ),
                                                          \+ cyclic_term(OutPattern),
                                                          match(Space, [','|Tail], OutPattern, Result).
+:- endif.
 
 % When the pattern list itself is a variable -> enumerate all atoms
 match(Space, PatternVar, OutPattern, Result) :- var(PatternVar), !,
@@ -191,3 +200,18 @@ match(Space, Pattern, OutPattern, Result) :-
                                functor(Head, Space, Arity),
                                clause(Head, true),
                                Head =.. [Space | Pattern].
+
+:- if(predicate_property(db_snapshot_scope(_, _), defined)).
+%The conjuncts of a pattern, each read from the space as it was at the call:
+match_conjuncts([], _, _, _).
+match_conjuncts([Head|Tail], Snapshot, Space, OutPattern) :- ( var(Head) -> get_atoms_at(Snapshot, Space, Head)
+                                                             ; is_list(Head), Head = [_|_] -> append([Space], Head, List), Term =.. List,
+                                                                                              db_snapshot_call(Snapshot, Term)
+                                                             ; must_be(atom, Space), db_snapshot_call(Snapshot, space_primitive(Space, Head)) ),
+                                                             \+ cyclic_term(OutPattern),
+                                                             match_conjuncts(Tail, Snapshot, Space, OutPattern).
+
+get_atoms_at(Snapshot, Space, Pattern) :- db_snapshot_call(Snapshot, space_primitive(Space, Pattern)).
+get_atoms_at(Snapshot, Space, Pattern) :- current_predicate(Space/Arity), functor(Head, Space, Arity),
+                                          db_snapshot_clause(Snapshot, Head, true), Head =.. [Space | Pattern].
+:- endif.
