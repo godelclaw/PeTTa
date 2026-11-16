@@ -2,6 +2,7 @@
 
 swipl -q -s tests/test_parser_swrite.pl -g run_tests -t halt || exit 1
 swipl -q -s tests/test_overload_requirements.pl -g 'run_tests(overload_requirements)' -t halt || exit 1
+swipl -q -s tests/test_new_space.pl -g "run_tests(new_space)" -t halt || exit 1
 swipl -q -s tests/test_det_folds.pl -g "run_tests(det_folds)" -t halt || exit 1
 swipl -q -s tests/test_definition_order.pl -g "run_tests(definition_order)" -t halt || exit 1
 swipl -q -s tests/test_branch_output.pl -g "run_tests(branch_output)" -t halt || exit 1
