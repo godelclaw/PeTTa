@@ -2,6 +2,7 @@
 
 swipl -q -s tests/test_parser_swrite.pl -g run_tests -t halt || exit 1
 swipl -q -s tests/test_new_space.pl -g run_tests -t halt -- --silent || exit 1
+swipl -q -s tests/test_conjunctive_match.pl -g 'run_tests(conjunctive_match)' -t halt || exit 1
 swipl -q -s tests/test_definition_order.pl -g run_tests -t halt -- --silent || exit 1
 swipl -q -s tests/test_type_chains.pl -g 'run_tests(type_chains)' -t halt || exit 1
 
