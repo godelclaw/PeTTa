@@ -159,22 +159,15 @@ space_missing(error(existence_error(procedure, Space/Arity), _), Term) :-
 %Match for conjunctive pattern
 match(_, LComma, OutPattern, Result) :- LComma == [','], !,
                                         Result = OutPattern.
-:- if(predicate_property(db_snapshot_scope(_, _), defined)).
-%All patterns are read in the state of the space at the call (db_snapshot_scope/2):
+%A conjunctive match reads all its patterns in the state of the space at the call,
+%which needs db_snapshot_scope/2 (SWI-Prolog of godelclaw/swipl-devel, branch main-fixed):
+:- predicate_property(db_snapshot_scope(_, _), defined)
+   -> true
+    ; print_message(error, format("PeTTa needs SWI-Prolog with db_snapshot_scope/2 (godelclaw/swipl-devel, branch main-fixed)", [])),
+      halt(1).
 match(Space, [Comma|Patterns], OutPattern, Result) :- Comma == ',', !,
                                                       db_snapshot_scope(Snapshot, match_conjuncts(Patterns, Snapshot, Space, OutPattern)),
                                                       Result = OutPattern.
-:- else.
-%Without db_snapshot_scope/2, each pattern is read in the state of the space
-%when its read begins:
-match(Space, [Comma|[Head|Tail]], OutPattern, Result) :- Comma == ',', !,
-                                                         ( var(Head) -> 'get-atoms'(Space, Head)
-                                                         ; is_list(Head), Head = [_|_] -> append([Space], Head, List), Term =.. List,
-                                                                                          space_call(Term)
-                                                         ; must_be(atom, Space), space_primitive(Space, Head) ),
-                                                         \+ cyclic_term(OutPattern),
-                                                         match(Space, [','|Tail], OutPattern, Result).
-:- endif.
 
 % When the pattern list itself is a variable -> enumerate all atoms
 match(Space, PatternVar, OutPattern, Result) :- var(PatternVar), !,
@@ -201,7 +194,6 @@ match(Space, Pattern, OutPattern, Result) :-
                                clause(Head, true),
                                Head =.. [Space | Pattern].
 
-:- if(predicate_property(db_snapshot_scope(_, _), defined)).
 %The conjuncts of a pattern, each read from the space as it was at the call:
 match_conjuncts([], _, _, _).
 match_conjuncts([Head|Tail], Snapshot, Space, OutPattern) :- ( var(Head) -> get_atoms_at(Snapshot, Space, Head)
@@ -214,4 +206,3 @@ match_conjuncts([Head|Tail], Snapshot, Space, OutPattern) :- ( var(Head) -> get_
 get_atoms_at(Snapshot, Space, Pattern) :- db_snapshot_call(Snapshot, space_primitive(Space, Pattern)).
 get_atoms_at(Snapshot, Space, Pattern) :- current_predicate(Space/Arity), functor(Head, Space, Arity),
                                           db_snapshot_clause(Snapshot, Head, true), Head =.. [Space | Pattern].
-:- endif.
