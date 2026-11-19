@@ -59,15 +59,21 @@ space_missing(error(existence_error(procedure, Space/Arity), _), Term) :-
     dynamic(Space/Arity),
     fail.
 
+%A conjunctive match reads all its patterns in the state of the space at the call,
+%which needs db_snapshot_scope/2 (SWI-Prolog of godelclaw/swipl-devel, branch main-fixed).
+%Without it, loading stops with the exception petta_requires/1. A directive that raises
+%error(_, _) is reported and loading goes on; this exception ends the load instead, so the
+%command line exits with status 1 and a program that embeds PeTTa can catch it.
+:- multifile prolog:message//1.
+prolog:message(petta_requires(db_snapshot_scope/2)) -->
+    [ 'PeTTa needs SWI-Prolog with db_snapshot_scope/2 (godelclaw/swipl-devel, branch main-fixed)' ].
+:- predicate_property(db_snapshot_scope(_, _), defined)
+   -> true
+    ; throw(petta_requires(db_snapshot_scope/2)).
+
 %Match for conjunctive pattern
 match(_, LComma, OutPattern, Result) :- LComma == [','], !,
                                         Result = OutPattern.
-%A conjunctive match reads all its patterns in the state of the space at the call,
-%which needs db_snapshot_scope/2 (SWI-Prolog of godelclaw/swipl-devel, branch main-fixed):
-:- predicate_property(db_snapshot_scope(_, _), defined)
-   -> true
-    ; print_message(error, format("PeTTa needs SWI-Prolog with db_snapshot_scope/2 (godelclaw/swipl-devel, branch main-fixed)", [])),
-      halt(1).
 match(Space, [Comma|Patterns], OutPattern, Result) :- Comma == ',', !,
                                                       db_snapshot_scope(Snapshot, match_conjuncts(Patterns, Snapshot, Space, OutPattern)),
                                                       Result = OutPattern.

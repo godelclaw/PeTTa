@@ -7,7 +7,8 @@ Please check out the [Wiki](https://github.com/patham9/PeTTa/wiki) for more info
 ### Dependencies
 
 - SWI-Prolog of [godelclaw/swipl-devel](https://github.com/godelclaw/swipl-devel), branch `main-fixed`:
-  conjunctive matches need its db_snapshot_scope/2, and PeTTa stops with an error without it
+  conjunctive matches need its db_snapshot_scope/2, and loading PeTTa raises an error without it.
+  This version was tested with commit 34f4339.
 - Python 3.x (for janus Python interop)
 
 ### Usage
