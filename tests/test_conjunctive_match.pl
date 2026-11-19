@@ -3,10 +3,9 @@
 :- use_module(library(aggregate)).
 
 %A conjunctive match reads all its patterns in the state of the space at
-%the call.  This needs db_snapshot_scope/2; without it the unit is skipped.
-snapshot_available :- predicate_property(db_snapshot_scope(_, _), defined).
+%the call.
 
-:- begin_tests(conjunctive_match, [condition(snapshot_available)]).
+:- begin_tests(conjunctive_match).
 
 space(S, Atoms) :- user:'new-space'(S), forall(member(A, Atoms), user:'add-atom'(S, A, _)).
 
