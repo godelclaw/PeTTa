@@ -27,7 +27,8 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
                                                           ; Removed = false ).
 
 %Add a function atom:
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|_],_], atom(FAtom), !,
+'add-atom'(Space, Term, true) :- Term = [=,[FAtom|_],Body], atom(FAtom), !,
+                                 note_late_definitions(Body),
                                  install_definition(Space, Term, runtime, Clause),
                                  maybe_print_compiled_clause("added function", Term, Clause).
 
