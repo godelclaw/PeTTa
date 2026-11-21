@@ -326,7 +326,8 @@ py_bool_norm(R, R).
 'get-state'(Var, Value) :- nb_getval(Var, Value).
 
 %%% Eval: %%%
-eval(C, Out) :- translate_expr(C, Goals, Out),
+eval(C, Out) :- note_late_definitions(C),
+                translate_expr(C, Goals, Out),
                 call_goals(Goals).
 
 call_goals([]).

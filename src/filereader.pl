@@ -125,10 +125,12 @@ precache_pending_bodies(File, ParsedForms) :-
 
 %First pass to convert MeTTa to Prolog Terms and register functions:
 parse_form(form(S, L), parsed(T, S, L, Term)) :- sread(S, Term),
-                                                 ( Term = [=, [F|W], _], atom(F) -> length(W, N), Arity is N + 1,
-                                                                                    register_function_signature(F, Arity), T=function
+                                                 ( Term = [=, [F|W], B], atom(F) -> length(W, N), Arity is N + 1,
+                                                                                    register_function_signature(F, Arity),
+                                                                                    note_late_definitions(B), T=function
                                                                                   ; T=expression ).
-parse_form(runnable(S, L), parsed(runnable, S, L, Term)) :- sread(S, Term).
+parse_form(runnable(S, L), parsed(runnable, S, L, Term)) :- sread(S, Term),
+                                                            note_late_definitions(Term).
 
 %Report where a static type/determinism error was raised before rethrowing it,
 %and publish the same source location while declaration caching runs so the

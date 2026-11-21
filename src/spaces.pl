@@ -34,7 +34,8 @@ remove_sexp(Space, TermIn) :-
 %Add a function atom. On failure or exception it rolls back its staged raw
 %atom, registration, metadata and compiled-dependency state; concurrent
 %observers can still see the interval between staging and cleanup.
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
+'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],Body], atom(FAtom), !,
+                                 note_late_definitions(Body),
                                  length(W, SourceArity),
                                  snapshot_runtime_function_add(
                                      FAtom, SourceArity, Snapshot),
