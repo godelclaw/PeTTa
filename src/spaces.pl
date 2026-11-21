@@ -12,8 +12,9 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
                            ; must_be(atom, Space), retractall(space_primitive(Space, Atom)) ).
 
 %Add a function atom:
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
+'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],Body], atom(FAtom), !,
                                  add_sexp(Space, Term),
+                                 note_late_definitions(Body),
                                  register_fun(FAtom),
                                  length(W, N),
                                  Arity is N + 1,

@@ -42,6 +42,15 @@ translate_clause(Input, (Head :- BodyConj), ConstrainArgs) :-
 note_symbol_head(HV) :- atom(HV), \+ symbol_head(HV), !, assertz(symbol_head(HV)).
 note_symbol_head(_).
 
+%Record heads of equations that code adds with add-atom: an application of such a
+%head is decided when it is reached, since the equation may have been added by then:
+:- dynamic late_definable/1.
+note_late_definitions(X) :- is_list(X), !,
+                            ( subsumes_term(['add-atom', _, [=, [_|_], _]], X), X = [_, _, [_, [F|_], _]],
+                              atom(F), \+ late_definable(F) -> assertz(late_definable(F)) ; true ),
+                            maplist(note_late_definitions, X).
+note_late_definitions(_).
+
 %Print compiled clause:
 maybe_print_compiled_clause(_, _, _) :- silent(true), !.
 maybe_print_compiled_clause(Label, FormTerm, Clause) :-
@@ -353,6 +362,9 @@ translate_expr([H0|T0], Goals, Out) :-
                          disj_list(Branches, Disj),
                          Goals = [Disj] )
               ; build_call_or_partial(Fun, AllAVs, Out, Inner, [], Goals))
+          %Not yet a function, but code adds equations for it => decide when reached:
+          ; atom(HV), \+ fun(HV), late_definable(HV) -> append(Inner, [( fun(HV) -> reduce([HV|AVs], Out)
+                                                                       ; Out = [HV|AVs] )], Goals)
           %Literals (numbers, strings, etc.), known non-function atom => data:
           ; ( atomic(HV), \+ atom(HV) ; atom(HV), \+ fun(HV) ) -> note_symbol_head(HV),
                                                                   Out = [HV|AVs],

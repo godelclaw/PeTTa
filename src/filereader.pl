@@ -73,12 +73,14 @@ warn_if_used_as_symbol(_).
 
 %First pass to convert MeTTa to Prolog Terms and register functions:
 parse_form(form(S), parsed(T, S, Term)) :- sread(S, Term),
-                                           ( Term = [=, [F|W], _], atom(F) -> length(W, N),
+                                           ( Term = [=, [F|W], B], atom(F) -> length(W, N),
                                                                               Arity is N + 1,
                                                                               register_function_signature(F, Arity),
+                                                                              note_late_definitions(B),
                                                                               T=function
                                                                             ; T=expression ).
-parse_form(runnable(S), parsed(runnable, S, Term)) :- sread(S, Term).
+parse_form(runnable(S), parsed(runnable, S, Term)) :- sread(S, Term),
+                                                      note_late_definitions(Term).
 
 %Second pass to compile / run / add the Terms:
 process_form(Space, _, parsed(expression, _, Term), []) :- 'add-atom'(Space, Term, true),
