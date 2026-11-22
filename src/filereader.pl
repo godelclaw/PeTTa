@@ -61,15 +61,13 @@ process_metta_string(S, Results, Space, Mode) :- string_codes(S, Cs),
                                                  maplist(process_form(Space, Mode), ParsedForms, ResultsList), !,
                                                  append(ResultsList, Results).
 
-register_function_signature(F, Arity) :- warn_if_used_as_symbol(F),
+register_function_signature(F, Arity) :- ( fun(F) -> WasFun = true ; WasFun = false ),
+                                         ( arity(F, Arity) -> HadArity = true ; HadArity = false ),
                                          register_fun(F),
-                                         ( catch(arity(F, Arity), _, fail) -> true ; assertz(arity(F, Arity)) ).
-
-%A function arriving after expressions already compiled its name as a plain symbol
-%cannot be called by those expressions anymore, which usually means an import came too late:
-warn_if_used_as_symbol(F) :- \+ fun(F), symbol_head(F), !,
-                             format(user_error, "Warning: ~w is defined or imported after already being used; earlier expressions treat it as a plain symbol. Move the import or definition above the first use.~n", [F]).
-warn_if_used_as_symbol(_).
+                                         ( HadArity == true -> true ; assertz(arity(F, Arity)) ),
+                                         ( ( WasFun == false ; HadArity == false )
+                                           -> bump_interface, refresh_symbol_users(F)
+                                            ; true ).
 
 %First pass to convert MeTTa to Prolog Terms and register functions:
 parse_form(form(S), parsed(T, S, Term)) :- sread(S, Term),
@@ -85,7 +83,7 @@ process_form(Space, _, parsed(expression, _, Term), []) :- 'add-atom'(Space, Ter
                                                         ( silent(true) -> true ; swrite(Term,STerm),
                                                                                  format("\e[33m--> metta sexpr -->~n\e[36m~w~n", [STerm]),
                                                                                  format("\e[33m^^^^^^^^^^^^^^^^^^^~n\e[0m") ).
-process_form(_, _, parsed(runnable, FormStr, Term), Result) :- translate_expr([collapse, Term], Goals, Result),
+process_form(_, _, parsed(runnable, FormStr, Term), Result) :- translate_transient([collapse, Term], Goals, Result),
                                                             ( silent(true) -> true ; format("\e[33m--> metta runnable  -->~n\e[36m!~w~n\e[33m-->  prolog goal  -->\e[35m ~n", [FormStr]),
                                                                                      forall(member(G, Goals), portray_clause((:- G))),
                                                                                      format("\e[33m^^^^^^^^^^^^^^^^^^^^^^^~n\e[0m") ),
@@ -93,12 +91,9 @@ process_form(_, _, parsed(runnable, FormStr, Term), Result) :- translate_expr([c
 process_form(Space, space_only, parsed(function, _, Term), []) :- add_sexp(Space, Term).
 process_form(Space, compile_functions, parsed(function, FormStr, Term), []) :- add_sexp(Space, Term),
                                                             Term = [=, [F|_], _],
-                                                            translate_clause(Term, Clause),
-                                                            assertz(Clause, Ref),
-                                                            assertz(translated_from(Ref, Term)),
+                                                            install_clause(Term, (Head :- Body), _),
                                                             metta_on_function_changed(F),
                                                             ( silent(true) -> true ; format("\e[33m--> metta function -->~n\e[36m~w~n\e[33m--> prolog clause -->~n\e[32m", [FormStr]),
-                                                                                     clause(Head, Body, Ref),
                                                                                      ( Body == true -> Show = Head; Show = (Head :- Body) ),
                                                                                      portray_clause(current_output, Show),
                                                                                      format("\e[33m^^^^^^^^^^^^^^^^^^^^^^~n\e[0m") ).

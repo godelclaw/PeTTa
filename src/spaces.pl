@@ -13,16 +13,22 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
 
 %Add a function atom:
 'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
+                                 ( fun(FAtom) -> WasFun = true ; WasFun = false ),
+                                 length(W, N), Arity is N + 1,
+                                 ( arity(FAtom, Arity) -> HadArity = true ; HadArity = false ),
                                  add_sexp(Space, Term),
                                  register_fun(FAtom),
-                                 length(W, N),
-                                 Arity is N + 1,
-                                 assertz(arity(FAtom,Arity)),
-                                 once(translate_clause(Term, Clause)),
-                                 assertz(Clause, Ref),
-                                 assertz(translated_from(Ref, Term)),
+                                 ( HadArity == true -> true ; assertz(arity(FAtom, Arity)) ),
+                                 install_clause(Term, Clause, _),
+                                 ( ( WasFun == false ; HadArity == false )
+                                   -> bump_interface, refresh_symbol_users(FAtom)
+                                    ; true ),
                                  metta_on_function_changed(FAtom),
                                  maybe_print_compiled_clause("added function", Term, Clause).
+
+%Add a declaration: refresh code translated with that name's declarations:
+'add-atom'(Space, Term, true) :- Term = [Colon, F, _], Colon == (:), atom(F), !,
+                                 add_sexp(Space, Term), bump_interface, refresh_symbol_users(F).
 
 %Add an atom to the space:
 'add-atom'(Space, Term, true) :- add_sexp(Space, Term).
@@ -34,13 +40,19 @@ remove_sexp(Space, Atom) :- ( var(Atom) -> instantiation_error(Atom)
 'remove-atom'(Space, Term, Removed) :- Term = [=,[F|_],_], atom(F), !,
                                        remove_sexp(Space, Term),
                                        findall(Ref, translated_from(Ref, Term), Refs),
-                                       forall(member(Ref, Refs), erase(Ref)),
+                                       forall(member(Ref, Refs), ( erase(Ref), retractall(used_symbol(_, Ref)) )),
                                        retractall(translated_from(_, Term)),
+                                       bump_interface,
                                        metta_on_function_changed(F),
                                        ( \+ ( current_predicate(F/A), functor(H2, F, A), clause(H2, _, _) )
-                                         -> retractall(fun(F)), metta_on_function_removed(F)
+                                         -> retractall(fun(F)), retractall(arity(F, _)), retractall(may_edit(F)),
+                                            refresh_symbol_users(F), metta_on_function_removed(F)
                                          ; true ),
                                        ( Refs = [] -> Removed = false ; Removed = true ).
+
+%Remove a declaration:
+'remove-atom'(Space, Term, true) :- Term = [Colon, F, _], Colon == (:), atom(F), !,
+                                    remove_sexp(Space, Term), bump_interface, refresh_symbol_users(F).
 
 %Remove all same atoms:
 'remove-atom'(Space, Term, true) :- remove_sexp(Space, Term).

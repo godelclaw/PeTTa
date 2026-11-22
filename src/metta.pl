@@ -299,7 +299,7 @@ py_bool_norm(R, R).
 'get-state'(Var, Value) :- nb_getval(Var, Value).
 
 %%% Eval: %%%
-eval(C, Out) :- translate_expr(C, Goals, Out),
+eval(C, Out) :- translate_transient(C, Goals, Out),
                 call_goals(Goals).
 
 call_goals([]).
@@ -322,7 +322,7 @@ call_goals([G|Gs]) :- call(G),
 
 %%% Prolog interop: %%%
 argv(K, Arg) :- current_prolog_flag(argv, Argv), nth0(K, Argv, A), ( atom_number(A, N) -> Arg = N ; Arg = A ).
-import_prolog_function(N, true) :- register_fun(N).
+import_prolog_function(N, true) :- register_fun(N), bump_interface, refresh_symbol_users(N).
 'Predicate'([F|Args], Term) :- Term =.. [F|Args].
 callPredicate(G, true) :- call(G).
 assertzPredicate(G, true) :- assertz(G).
@@ -408,16 +408,16 @@ importer_helper(Space, File) :-
 
 :- dynamic translator_rule/1.
 'add-translator-rule!'(HV, true) :- ( translator_rule(HV)
-                                      -> true ; assertz(translator_rule(HV)) ).
+                                      -> true ; assertz(translator_rule(HV)), bump_interface, refresh_symbol_users(HV) ).
 
-'remove-translator-rule!'(HV, true) :- retractall(translator_rule(HV)).
+'remove-translator-rule!'(HV, true) :- retractall(translator_rule(HV)), bump_interface, refresh_symbol_users(HV).
 
 %%% Registration: %%%
 :- dynamic fun/1, arity/2.
 register_fun(N) :- fun(N), !.
 %Arities are registered in ascending order: the order current_predicate/1
 %enumerates them in depends on how many atoms the process created before.
-register_fun(N) :- assertz(fun(N)),
+register_fun(N) :- assertz(fun(N)), bump_interface,
                    findall(Arity, (current_predicate(N/Arity), \+ (current_op(_, _, N), Arity =< 2)), Arities0),
                    sort(Arities0, Arities),
                    forall(member(Arity, Arities),
