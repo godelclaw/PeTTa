@@ -31,8 +31,8 @@
 !(add-atom &self (= (gone $x) (+ $x 10)))
 !(test (use-gone) 11)
 
-; The current invocation keeps its compiled data expression. The next uses a call.
+; An application reached after the add-atom calls the new equation.
 (= (define-and-use)
    (let $u (add-atom &self (= (fresh $x) (+ $x 10))) (fresh 1)))
-!(test (collapse (define-and-use)) ((fresh 1)))
+!(test (collapse (define-and-use)) (11))
 !(test (fresh 1) 11)

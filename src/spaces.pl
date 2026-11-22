@@ -31,6 +31,11 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
                                  install_definition(Space, Term, runtime, Clause),
                                  maybe_print_compiled_clause("added function", Term, Clause).
 
+%Add a declaration: code translated with the name's declarations is translated again:
+'add-atom'(Space, Term, true) :- Term = [Colon, F, _], Colon == (:), atom(F), !,
+                                 with_mutex(petta_definitions, transaction((
+                                 add_sexp(Space, Term), refresh_users(F, []), bump_interface ))).
+
 %Add an atom to the space:
 'add-atom'(Space, Term, true) :- add_sexp(Space, Term).
 
@@ -43,6 +48,11 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
                                        remove_sexp(Space, Term, Removed),
                                        findall(Ref-A, ( translated_from(Ref, Term), clause(H, _, Ref), functor(H, F, A) ), Refs),
                                        ( Refs = [] -> true ; removed_equations(F, Refs) ) ))).
+
+%Remove a declaration:
+'remove-atom'(Space, Term, Removed) :- Term = [Colon, F, _], Colon == (:), atom(F), !,
+                                       with_mutex(petta_definitions, transaction((
+                                       remove_sexp(Space, Term, Removed), refresh_users(F, []), bump_interface ))).
 
 %Remove all same atoms:
 'remove-atom'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).

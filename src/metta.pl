@@ -317,7 +317,7 @@ py_bool_norm(R, R).
 'get-state'(Var, Value) :- nb_getval(Var, Value).
 
 %%% Eval: %%%
-eval(C, Out) :- translate_expr(C, Goals, Out),
+eval(C, Out) :- translate_transient(C, Goals, Out),
                 call_goals(Goals).
 
 call_goals([]).
@@ -341,7 +341,7 @@ call_goals([G|Gs]) :- call(G),
 %%% Prolog interop: %%%
 argv(K, Arg) :- current_prolog_flag(argv, Argv), nth0(K, Argv, A), ( atom_number(A, N) -> Arg = N ; Arg = A ).
 import_prolog_function(N, true) :- with_mutex(petta_definitions,
-                                     transaction((register_fun(N), refresh_users(N, [])))).
+                                     transaction((register_fun(N), refresh_users(N, []), bump_interface))).
 'Predicate'([F|Args], Term) :- Term =.. [F|Args].
 callPredicate(G, true) :- call(G).
 assertzPredicate(G, true) :- assertz(G).
@@ -426,16 +426,22 @@ importer_helper(Space, File) :-
          import_once(Space, CanonPath, load_metta_file(CanonPath, _, Space)) ).
 
 :- dynamic translator_rule/1.
-'add-translator-rule!'(HV, true) :- ( translator_rule(HV)
-                                      -> true ; assertz(translator_rule(HV)) ).
+'add-translator-rule!'(HV, true) :-
+    with_mutex(petta_definitions, transaction((
+        ( translator_rule(HV) -> true
+        ; assertz(translator_rule(HV)), refresh_users(HV, []), bump_interface ) ))).
 
-'remove-translator-rule!'(HV, true) :- retractall(translator_rule(HV)).
+'remove-translator-rule!'(HV, true) :-
+    with_mutex(petta_definitions, transaction((
+        ( translator_rule(HV)
+          -> retractall(translator_rule(HV)), refresh_users(HV, []), bump_interface
+           ; true ) ))).
 
 %%% Registration: %%%
 :- dynamic fun/1, arity/2.
 %Arities are registered in ascending order: the order current_predicate/1
 %enumerates them in depends on how many atoms the process created before.
-register_fun(N) :- ( fun(N) -> Existing = true ; Existing = false, assertz(fun(N)) ),
+register_fun(N) :- ( fun(N) -> Existing = true ; Existing = false, assertz(fun(N)), bump_interface ),
                    findall(Arity, native_predicate_arity(N, Arity), Arities0),
                    sort(Arities0, Arities),
                    ( (Existing == false ; Arities \= []), \+ native_function(N)

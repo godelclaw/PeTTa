@@ -257,11 +257,189 @@ test(removing_a_callee_inside_an_active_caller_uses_the_empty_equation_fallback)
                 (let $ignored (remove-atom &self (= (do_luv_removed $x) (+ $x 1))) (do_luv_removed 5)))
              !(do_luv_remove_and_use)",Results),assertion(Results==[[do_luv_removed,5]]).
 
-test(a_new_name_remains_data_in_the_already_entered_translation) :-
+test(a_name_added_earlier_in_a_running_body_is_called_when_reached) :-
     program("(= (do_luv_define_and_use $x)
                 (let $ignored (add-atom &self (= (do_luv_new $v) (+ $v 1))) (do_luv_new $x)))
              !(do_luv_define_and_use 1) !(do_luv_new 1)",Results),
-    assertion(Results==[[do_luv_new,1],2]).
+    assertion(Results==[2,2]).
+
+test(an_equation_added_from_a_value_is_called_later_in_the_same_body) :-
+    program("(= (do_live_learn $rule) (let $ignored (add-atom &self $rule) (do_live_rule 1)))
+             !(do_live_learn (quote (= (do_live_rule $x) ok)))", Results),
+    assertion(Results==[ok]).
+
+test(a_quoted_add_atom_does_not_change_how_other_code_is_translated) :-
+    call_with_time_limit(2,
+      program("(= (do_live_spin) (do_live_spin))
+               (= (do_live_quoted) (Pair (do_live_spin) (do_live_unseen 2)))
+               !(collapse (let (Pair $a (do_live_unseen 3)) (do_live_quoted) yes))
+               !(quote (add-atom &self (= (do_live_unseen $x) red)))", Results)),
+    Results = [[], _].
+
+test(a_late_call_holds_atom_arguments_and_lets_catch_see_errors) :-
+    program("(: do_live_hold (-> Atom %Undefined%))
+             (= (do_live_install_hold)
+                (let $ignored (add-atom &self (= (do_live_hold $x) (held $x)))
+                  (do_live_hold (+ 1 2))))
+             (= (do_live_install_divide $x)
+                (let $ignored (add-atom &self (= (do_live_divide $y) (/ 1 $y)))
+                  (catch (do_live_divide $x))))
+             !(do_live_install_hold) !(do_live_install_divide 0)", Results),
+    Results = [[held,[+,1,2]], ['Error',evaluation_error(zero_divisor),_]].
+
+test(a_later_alternative_of_an_entered_call_sees_an_earlier_alternative_add) :-
+    program("(= (do_live_choice)
+                (let $ignored (add-atom &self (= (do_live_later $x) v)) first))
+             (= (do_live_choice) (do_live_later 1))
+             !(collapse (do_live_choice))", Results),
+    assertion(Results==[[first,v]]).
+
+test(code_after_an_import_or_an_eval_in_the_same_body_calls_what_it_defined) :-
+    program("(= (do_live_import) (let $ignored (import! &self (library lib_roman)) (traceid 5)))
+             (= (do_live_eval $code) (let $ignored (eval $code) (do_live_hook 2)))
+             !(do_live_import)
+             !(do_live_eval (quote (add-atom &self (= (do_live_hook $x) (* $x 10)))))", Results),
+    assertion(Results==[5,20]).
+
+test(a_relational_search_after_an_edit_keeps_its_demand) :-
+    call_with_time_limit(5,
+      program("(= (do_live_plus Z $y) $y)
+               (= (do_live_plus (S $x) $y) (S (do_live_plus $x $y)))
+               (= (do_live_invert $eq)
+                  (let $u (add-atom &self $eq)
+                    (collapse (let (do_live_plus $a $b) (S (S Z)) (do_live_pair $a $b)))))
+               !(do_live_invert (quote (= (do_live_noted) 1)))", Results)),
+    assertion(Results==[[[do_live_pair,'Z',['S',['S','Z']]],[do_live_pair,['S','Z'],['S','Z']],
+                         [do_live_pair,['S',['S','Z']],'Z']]]).
+
+test(an_alternative_or_answer_resumed_after_an_edit_sees_it) :-
+    program("(= (do_live_rerun $eq)
+                (collapse (let $x (superpose (1 2))
+                            (let $a (do_live_re $x) (let $u (add-atom &self $eq) $a)))))
+             !(do_live_rerun (quote (= (do_live_re $y) seen)))
+             (do_live_item 1) (do_live_item 2)
+             (= (do_live_each $eq)
+                (collapse (match &self (do_live_item $n)
+                            (let $a (do_live_ml $n) (let $u (add-atom &self $eq) $a)))))
+             !(do_live_each (quote (= (do_live_ml $y) got)))", Results),
+    assertion(Results==[[[do_live_re,1],seen],[[do_live_ml,1],got]]).
+
+test(an_equation_a_called_function_adds_is_seen_by_the_caller) :-
+    program("(= (do_live_use_early) (let $u (do_live_install (quote (= (do_live_ce) early))) (do_live_ce)))
+             (= (do_live_install $e) (add-atom &self $e))
+             (= (do_live_wrap $e) (do_live_install $e))
+             (= (do_live_use_wrap) (let $u (do_live_wrap (quote (= (do_live_cw) wrapped))) (do_live_cw)))
+             !(do_live_use_early) !(do_live_use_wrap)", Results),
+    assertion(Results==[early,wrapped]).
+
+test(arguments_evaluated_after_an_edit_see_it) :-
+    program("(= (do_live_adder) (add-atom &self (= (do_live_t $x) v)))
+             (= (do_live_fields) (Pair (do_live_adder) (do_live_t 1)))
+             !(do_live_fields)", Results),
+    assertion(Results==[['Pair',true,v]]).
+
+test(arguments_next_to_a_call_through_a_value_and_typed_calls_see_its_edit) :-
+    program("(= (do_live_ho_add) (add-atom &self (= (do_live_hot) ok)))
+             (= (do_live_ho_pair $g) (Pair ($g) (do_live_hot)))
+             (: do_live_typed_pair (-> %Undefined% %Undefined% %Undefined%))
+             (= (do_live_typed_pair $a $b) (Pair $a $b))
+             (= (do_live_typed_go) (do_live_typed_pair (add-atom &self (= (do_live_tt) ok)) (do_live_tt)))
+             (= (do_live_atom_mk) (progn (add-atom &self (: do_live_ah (-> Atom %Undefined%)))
+                                         (add-atom &self (= (do_live_ah $x) $x))))
+             (= (do_live_atom_go) (do_live_ah (do_live_atom_mk)))
+             (= (do_live_ov $x) $x)
+             (= (do_live_ov_go) (do_live_ov (add-atom &self (= (do_live_ov $x $y) (Pair $x $y))) 2))
+             !(do_live_ho_pair do_live_ho_add) !(do_live_typed_go) !(do_live_atom_go) !(do_live_ov_go)", Results),
+    assertion(Results==[['Pair',true,ok],['Pair',true,ok],true,['Pair',true,2]]).
+
+test(case_boolean_prog1_and_translator_rules_see_preceding_edits) :-
+    program("(= (do_live_case) (case (add-atom &self (= (do_live_ct) ok)) ((true (do_live_ct)))))
+             (= (do_live_and) (and-then (add-atom &self (= (do_live_at) true)) (do_live_at)))
+             (= (do_live_or) (or-else (let $u (add-atom &self (= (do_live_ot) true)) False) (do_live_ot)))
+             (= (do_live_p1) (progn (prog1 7 (add-atom &self (= (do_live_p1t) ok))
+                                      (let $r (do_live_p1t) (change-state! do_live_p1s $r))) (get-state do_live_p1s)))
+             (= (do_live_tr $x) (quote (+ $x 10)))
+             (= (do_live_tr_go) (let $u (add-translator-rule! do_live_tr) (do_live_tr 5)))
+             !(do_live_case) !(do_live_and) !(do_live_or) !(do_live_p1) !(do_live_tr_go)", Results),
+    assertion(Results==[ok,true,true,ok,15]).
+
+test(higher_order_wrappers_partials_and_late_eval_editors_propagate) :-
+    program("(= (do_live_winst) (add-atom &self (= (do_live_wt) ok)))
+             (= (do_live_apply $f) ($f))
+             (= (do_live_wgo) (let $u (do_live_apply do_live_winst) (do_live_wt)))
+             (= (do_live_ph $e $x) 0)
+             (= (do_live_pmk $e) (do_live_ph $e))
+             (= (do_live_pcall) (let $u (do_live_pmk (quote (= (do_live_pt) ok)) 1) (do_live_pt)))
+             !(add-atom &self (= (do_live_ph $e $x) (add-atom &self $e)))
+             (= (do_live_ego) (let $u (eval (do_live_ehelp)) (do_live_et)))
+             (= (do_live_ehelp) (add-atom &self (= (do_live_et) ok)))
+             (= (do_live_ch $f) ($f))
+             (= (do_live_ch $f) (do_live_cht))
+             (= (do_live_chinst) (add-atom &self (= (do_live_cht) ok)))
+             !(do_live_wgo) !(collapse (do_live_pcall)) !(do_live_ego) !(collapse (do_live_ch do_live_chinst))", Results),
+    assertion(Results==[true,ok,[[do_live_pt],ok],ok,[true,ok]]).
+
+test(cut_inside_fresh_and_nested_stretches_commits_only_its_enclosing_clause) :-
+    program("(= (do_live_cut $x) (let $u (add-atom &self (= (do_live_cg $x) (ok $x))) (progn (cut) (do_live_cg $x))))
+             (= (do_live_cut $x) fallback)
+             (= (do_live_ncut) (let $u (add-atom &self (= (do_live_ng1) 1))
+                                 (let $v (add-atom &self (= (do_live_ng2) 2))
+                                   (progn (cut) (+ (do_live_ng1) (do_live_ng2))))))
+             (= (do_live_ncut) fallback)
+             (= (do_live_ocut) (let $u (add-atom &self (= (do_live_og) ok)) (once (progn (cut) (do_live_og)))))
+             (= (do_live_ocut) second)
+             !(collapse (do_live_cut 1))
+             !(collapse (let $a (superpose (a b)) (Pair $a (do_live_cut $a))))
+             !(collapse (do_live_ncut))
+             !(collapse (do_live_ocut))", Results),
+    assertion(Results==[[[ok,1]],[['Pair',a,[ok,a]],['Pair',b,[ok,b]]],[3],[ok,second]]).
+
+test(consumer_resumed_alternatives_stay_frozen_equally_for_calls_and_superpose) :-
+    program("(= (do_live_gen) (do_live_g1))
+             (= (do_live_gen) (do_live_g2))
+             (= (do_live_via_fn) (collapse (let $x (do_live_gen) (let $u (add-atom &self (= (do_live_g2) 2)) $x))))
+             (= (do_live_via_sup) (collapse (let $x (superpose ((do_live_g1) (do_live_g2b)))
+                                              (let $u (add-atom &self (= (do_live_g2b) 2)) $x))))
+             !(do_live_via_fn) !(do_live_via_sup)", Results),
+    assertion(Results==[[[do_live_g1],[do_live_g2]],[[do_live_g1],[do_live_g2b]]]).
+
+test(editing_body_translates_sibling_lambdas_once) :-
+    lambda_names(Before),
+    program("(= (do_live_lam) (let $f (|-> ($x) (+ $x 1))
+                (let $u (add-atom &self (= (do_live_lt) 10)) ($f (do_live_lt)))))", _),
+    lambda_names(After),
+    length(Before, NB), length(After, NA),
+    assertion(NA - NB =:= 1),
+    program("!(do_live_lam)", Results),
+    assertion(Results==[11]).
+
+test(code_after_a_call_through_a_value_sees_what_the_call_defined) :-
+    program("(= (do_live_inst) (add-atom &self (= (do_live_hh) one)))
+             (= (do_live_go $f) (let $u ($f) (do_live_hh)))
+             (= (do_live_inst3 $e) (add-atom &self $e))
+             (= (do_live_go2 $f $e) (let $u ($f $e) (do_live_hc)))
+             !(do_live_go do_live_inst)
+             !(do_live_go2 do_live_inst3 (quote (= (do_live_hc) ho)))", Results),
+    assertion(Results==[one,ho]).
+
+test(a_running_eval_or_installation_leaves_no_predicates_behind) :-
+    findall(N, current_predicate(N/_), Before), length(Before, NB),
+    program("(= (do_live_zz $x) $x)
+             (= (do_live_rep $n) (if (> $n 0)
+                (let $u (eval (let $r (remove-atom &self (= (do_live_zz $x) $x))
+                                (let $a (add-atom &self (= (do_live_zz $x) $x)) (do_live_zz $n))))
+                     (do_live_rep (- $n 1)))
+                done))
+             !(do_live_rep 200)", Results),
+    findall(N, current_predicate(N/_), After), length(After, NA),
+    assertion(Results==[done]), assertion(NA - NB < 10).
+
+test(code_without_equation_edits_still_prunes_an_incompatible_result) :-
+    call_with_time_limit(2,
+      program("(= (do_live_loop) (do_live_loop))
+               (= (do_live_pruned) (Pair (do_live_loop) (Leaf 2)))
+               !(collapse (let (Pair $a (Leaf 3)) (do_live_pruned) yes))", Results)),
+    assertion(Results==[[]]).
 
 test(an_entered_nondeterministic_equation_keeps_its_remaining_answers) :-
     program("(= (do_luv_choice) (superpose (1 2)))",_),
