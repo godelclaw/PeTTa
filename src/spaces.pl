@@ -19,7 +19,8 @@ add_sexp(Space, TermIn) :-
     ; is_list(TermIn), TermIn = [Rel|Args] ->
         Term =.. [Space, Rel | Args],
         assertz(Term),
-        maybe_cache_type_decl(Space, [Rel|Args])
+        maybe_cache_type_decl(Space, [Rel|Args]),
+        ( Rel == (:), Args = [DeclF|_], atom(DeclF) -> bump_interface ; true )
     ;
         must_be(atom, Space),
         assertz(space_primitive(Space, TermIn))
@@ -34,7 +35,8 @@ remove_sexp(Space, TermIn, Removed) :-
     ; is_list(TermIn), TermIn = [Rel|Args] ->
         Term =.. [Space, Rel | Args],
         retract_reporting(Term, Removed),
-        maybe_uncache_type_decl(Space, [Rel|Args])
+        maybe_uncache_type_decl(Space, [Rel|Args]),
+        ( Rel == (:), Args = [DeclF|_], atom(DeclF) -> bump_interface ; true )
     ;
         must_be(atom, Space),
         retract_reporting(space_primitive(Space, TermIn), Removed)
@@ -71,6 +73,7 @@ runtime_add_function_tx(Space, Term, FAtom, W) :-
     sync_function_arities(FAtom),
     notify_mutation(clause_changed(FAtom/N, runtime)),
     refresh_users(FAtom, []),
+    bump_interface,
     forall(metta_on_function_changed(FAtom), true),
     invalidate_specializations(FAtom),
     maybe_print_compiled_clause("added function", Term, Clause).
@@ -102,6 +105,7 @@ runtime_add_function_tx(Space, Term, FAtom, W) :-
                    ignore(catch(erase(Ref), _, fail)),
                    no_equations_answer(F, A) )),
           sync_function_arities(F),
+          ( fun(F) -> true ; retractall(may_edit(F)) ),
           invalidate_specializations(F),
           length(Args, N),
           ( \+ ( equation_arity(F, RemA, _), RemA is N + 1 )
@@ -114,6 +118,7 @@ runtime_add_function_tx(Space, Term, FAtom, W) :-
           % rebuilding callers so they see data syntax, not a stale call.
           notify_mutation(clause_changed(F/N, runtime)),
           refresh_users(F, []),
+          bump_interface,
           forall(metta_on_function_changed(F), true),
           ( fun(F)
             -> true

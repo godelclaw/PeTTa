@@ -1,3 +1,4 @@
+:- use_module(library(varnumbers), [varnumbers/2]).
 :- dynamic translated_from/2.
 :- dynamic translation_use/4.
 :- dynamic translation_decision/3.
@@ -76,6 +77,8 @@ functional_pattern_application([F|Args], F, Args) :-
 %those observed by all nested analyses; assertion sites attach them to the real
 %clause reference with record_compiled_dependencies/3.
 translate_clause(Input, Clause, ConstrainArgs, Dependencies) :-
+        translate_clause(Input, Clause, ConstrainArgs, auto, Dependencies).
+translate_clause(Input, Clause, ConstrainArgs, Pos, Dependencies) :-
         Input = [=, [F|Args], BodyExpr],
         atom(F),
         length(Args, N),
@@ -85,7 +88,7 @@ translate_clause(Input, Clause, ConstrainArgs, Dependencies) :-
             analysis_collect(
                 with_compiling_caller(
                     F, N,
-                    translate_clause_core(Input, Clause, ConstrainArgs)),
+                    translate_clause_unit(Input, Clause, ConstrainArgs, Pos)),
                 Events)),
         analysis_term_dependencies(SourceTerm, TermDependencies),
         analysis_function_decl_dependencies(F, DeclDependencies),
@@ -98,18 +101,37 @@ translate_clause(Input, Clause, ConstrainArgs, Dependencies) :-
         analysis_reemit_proof(Proof).
 
 compile_equation(Input, Clause, ConstrainArgs, Dependencies, Uses) :-
+    compile_equation(Input, Clause, ConstrainArgs, auto, Dependencies, Uses).
+compile_equation(Input, Clause, ConstrainArgs, Pos, Dependencies, Uses) :-
     ( nb_current(petta_translation_uses, Previous) -> true ; Previous = '$absent' ),
     Box = uses([]),
     setup_call_cleanup(
         ( asserta(translation_recording_active, ActiveRef),
           nb_linkval(petta_translation_uses, Box) ),
-        translate_clause(Input, Clause, ConstrainArgs, Dependencies),
+        translate_clause(Input, Clause, ConstrainArgs, Pos, Dependencies),
         ( erase(ActiveRef),
           ( Previous == '$absent'
             -> nb_delete(petta_translation_uses)
           ; nb_linkval(petta_translation_uses, Previous) ) ) ),
     arg(1, Box, Raw),
     sort(Raw, Uses).
+
+translate_clause_unit(Input, Clause, ConstrainArgs, Pos) :-
+    Input = [=, [F|_], _],
+    ( Pos == first -> LaterClause = false
+    ; Pos == later -> LaterClause = true
+    ; equation_arity(F, _, _) -> LaterClause = true
+    ; LaterClause = false ),
+    ( LaterClause == true, may_edit(F) -> StretchBody = true ; StretchBody = false ),
+    in_unit(stored(Token, Used), Cut,
+            translate_clause_core(Input, Clause0, ConstrainArgs, StretchBody),
+            Edits, CutUsed),
+    ( Edits > 0, \+ may_edit(F) -> assertz(may_edit(F)) ; true ),
+    ( Used == true -> flag(petta_unit_token, Token, Token + 1), note_unit_token(Token) ; true ),
+    ( CutUsed == true -> prepend_clause_cut(Clause0, Cut, Clause) ; Clause = Clause0 ).
+
+prepend_clause_cut((Head :- true), Cut, (Head :- prolog_current_frame(CF), clause_cut_point(CF, Cut))) :- !.
+prepend_clause_cut((Head :- Body), Cut, (Head :- prolog_current_frame(CF), clause_cut_point(CF, Cut), Body)).
 
 with_isolated_analysis_events(Goal) :-
     ( nb_current('$analysis_event_stack', Saved)
@@ -134,7 +156,9 @@ with_compiling_clause(F, Params, Body, Goal) :-
 
 current_compiling_caller(F, N) :-
     nb_current('$compiling_caller', F/N).
-translate_clause_core(Input, (Head :- BodyConj), ConstrainArgs) :-
+translate_clause_core(Input, Clause, ConstrainArgs) :-
+    translate_clause_core(Input, Clause, ConstrainArgs, false).
+translate_clause_core(Input, (Head :- BodyConj), ConstrainArgs, StretchBody) :-
                                                Input = [=, [F|Args0], BodyExpr],
                                                length(Args0, SourceArity),
                                                %The clause-set memo is stale before
@@ -179,7 +203,10 @@ translate_clause_core(Input, (Head :- BodyConj), ConstrainArgs) :-
                                                det_boundness_checks(F, Args1, DetChecks),
                                                begin_clause_inference(F, Args1, Assume, SavedInf),
                                                with_compiling_clause(F, Args1, BodyExpr,
-                                                                     translate_declared_body(F, Args0, DeclOut, BodyExpr, GoalsBody, ExpOut)),
+                                                                     ( translate_declared_body(F, Args0, DeclOut, BodyExpr, GsBody0, ExpOut0),
+                                                                       ( StretchBody == true, \+ clause_plain_atom_output(F, Args0)
+                                                                         -> stretch(BodyExpr, GsBody0, ExpOut0, GoalsBody, ExpOut)
+                                                                          ; GoalsBody = GsBody0, ExpOut = ExpOut0 ) )),
                                                %A body that forced a declared parametric parameter to a concrete type
                                                %broke the universality its declaration claims (skip for specialized copies):
                                                ( ConstrainArgs == false -> true
@@ -302,15 +329,16 @@ restore_recompile_state(F, recompile_state(Metas, Provisos, Inferred)) :-
     forall(member(inferred(ATs, OT), Inferred),
            assertz(inferred_fn_type(F, ATs, OT))).
 
-stage_function_clauses(_, [], []).
-stage_function_clauses(F, [Ref-Term|Us],
+stage_function_clauses(F, Us, Staged) :- stage_function_clauses(F, Us, first, Staged).
+stage_function_clauses(_, [], _, []).
+stage_function_clauses(F, [Ref-Term|Us], Pos,
                        [staged(Ref, Term, OriginFile, Clause, Dependencies, Uses)|Ss]) :-
     clause(_, _, Ref),
     compiled_dependency_origin(Ref, OriginFile),
     ( ho_specialization(_, F) -> ConstrainArgs = false ; ConstrainArgs = true ),
     in_metta_file(OriginFile,
-                  compile_equation(Term, Clause, ConstrainArgs, Dependencies, Uses)),
-    stage_function_clauses(F, Us, Ss).
+                  compile_equation(Term, Clause, ConstrainArgs, Pos, Dependencies, Uses)),
+    stage_function_clauses(F, Us, later, Ss).
 
 swap_staged_function(F, Us, Staged) :-
     findall(OldA,
@@ -387,7 +415,10 @@ call_memo_mode(F, N, Memo) :-
       -> Memo = direct
     ; Memo = memo ).
 
-translation_key(F, data, Key) :- ( fun(F) -> Key = function ; Key = data ).
+translation_key(F, data, Key) :-
+    ( translator_rule(F) -> Key = translator
+    ; fun(F) -> Key = function
+    ; Key = data ).
 translation_key(F, pattern, Key) :-
     ( fun(F) -> findall(A, callable_arity(F, A), As), sort(As, Key) ; Key = data ).
 translation_key(F, call(N), Key) :-
@@ -397,23 +428,24 @@ translation_key(F, call(N), Key) :-
     ; \+ fun(F) ->
         Key = data
     ; A is N + 1,
+      ( edits_world(F) -> Edit = edits ; Edit = pure ),
       self_function_types(F, Types),
       ( callable_arity(F, A) ->
           call_memo_mode(F, N, Memo),
-          Key = call(Memo, Types)
+          Key = call(Memo, Types, Edit)
       ; findall(M, (callable_arity(F, M), M > A), Ms),
         sort(Ms, More),
         ( More == [] ->
-            ( callable_arity(F, _) -> Key = over(Types) ; Key = partial_any(Types) )
+            ( callable_arity(F, _) -> Key = over(Types, Edit) ; Key = partial_any(Types, Edit) )
         ; More = [TargetA|_],
           TargetN is TargetA - 1,
           call_memo_mode(F, TargetN, TargetMemo),
-          eta_mode(F, Mode), Key = partial(More, TargetMemo, Types, Mode) ) ) ).
+          eta_mode(F, Mode), Key = partial(More, TargetMemo, Types, Mode, Edit) ) ) ).
 
 translation_use_valid(F, Use, Key) :-
     translation_key(F, Use, Now),
     ( Now =@= Key -> true
-    ; Now == data, Use = call(N), Key == call(direct, []), A is N + 1,
+    ; Now == data, Use = call(N), Key == call(direct, [], pure), A is N + 1,
       no_equations_clause(F, A, _) ).
 
 record_translation(Ref, Term, Uses) :- record_translation(assertz, Ref, Term, Uses).
@@ -425,6 +457,7 @@ record_translation(Insert, Ref, Term, Uses) :-
           ; assertz(translation_decision(F, Use, Key)) ) )).
 
 forget_translation(Ref) :-
+    ( retract(clause_unit(Ref, Token)) -> retractall(live_unit(Token)) ; true ),
     findall(use(F, Use, Key), translation_use(F, Ref, Use, Key), Uses),
     retractall(translated_from(Ref, _)),
     retractall(translation_use(_, Ref, _, _)),
@@ -456,7 +489,7 @@ register_file_provisional_signatures(compile_functions, Forms, compile_functions
 refresh_file_provisional_signatures(space_only) :- !.
 refresh_file_provisional_signatures(compile_functions(_, Functions)) :-
     with_mutex(petta_definitions,
-        with_definition_update(forall(member(F, Functions), refresh_users(F, [])))).
+        with_definition_update(( forall(member(F, Functions), refresh_users(F, [])), bump_interface ))).
 
 finish_file_signatures(space_only) :- !.
 finish_file_signatures(compile_functions(Owner, _)) :-
@@ -492,6 +525,7 @@ install_file_definition(Space, Owner, Line, FormStr, Term, Clause) :-
           sync_function_arities(Fn),
           notify_mutation(clause_changed(Fn/N, prevalidated)),
           refresh_users(Fn, []),
+          bump_interface,
           forall(metta_on_function_changed(Fn), true) ))).
 
 assert_equation(Term, Clause, Uses, Ref) :-
@@ -500,7 +534,146 @@ assert_equation(Term, Clause, Uses, Ref) :-
     ( retract(no_equations_clause(F, A, Empty)) -> erase(Empty) ; true ),
     assertz(Clause, Ref),
     assertz(equation_arity(F, A, Ref)),
-    record_translation(Ref, Term, Uses).
+    record_translation(Ref, Term, Uses),
+    ( memberchk(token(Token), Uses) -> assertz(live_unit(Token)), assertz(clause_unit(Ref, Token)) ; true ).
+
+%%% Deciding code when it is reached %%%
+:- dynamic may_edit/1, live_unit/1, clause_unit/2.
+
+may_change_interface(Atom) :- ( var(Atom) -> true ; Atom = [E|_], ( var(E) ; E == (=) ; E == (:) ) ).
+
+edits_world(F) :- ( may_edit(F)
+                  ; memberchk(F, ['import!', 'library-import!', 'cached-import!',
+                                  import_prolog_function, 'add-translator-rule!', 'remove-translator-rule!']) ), !.
+
+bump_interface :- flag(petta_iface_rev, R, R + 1).
+interface_is(Revision) :- flag(petta_iface_rev, Revision, Revision).
+
+in_unit(Kind, Cut, Goal, Edits, CutUsed) :-
+    ( nb_current(petta_unit, Prev) -> true ; Prev = none ),
+    Unit = u(Kind, 0, Cut, false),
+    b_setval(petta_unit, Unit),
+    call(Goal),
+    arg(2, Unit, Edits), arg(4, Unit, CutUsed),
+    b_setval(petta_unit, Prev).
+
+note_edit :- ( nb_current(petta_unit, U), U = u(_, N, _, _) -> N1 is N + 1, nb_setarg(2, U, N1) ; true ).
+counting(Goal, Edited) :-
+    ( nb_current(petta_unit, U), U = u(_, N0, _, _)
+      -> call(Goal), arg(2, U, N1), ( N1 > N0 -> Edited = true ; Edited = false )
+       ; call(Goal), Edited = false ).
+without_cut(Goal) :-
+    ( nb_current(petta_unit, U), U = u(_, _, Cut, _), Cut \== none
+      -> setup_call_cleanup(nb_setarg(3, U, none), call(Goal), nb_setarg(3, U, Cut))
+       ; call(Goal) ).
+
+note_eval(Expr) :- ( var(Expr) -> note_edit
+                   ; compound(Expr) -> ( text_edits(Expr) -> note_edit ; true )
+                   ; true ).
+text_edits([H|T]) :-
+    ( var(H) -> true
+    ; H == quote -> fail
+    ; atom(H) -> ( is_list(T), length(T, N), note_translation_use(H, call(N)), fail
+                 ; text_edit_head(H, T) -> true
+                 ; member(A, T), compound(A), text_edits(A), ! )
+    ; member(A, [H|T]), compound(A), text_edits(A), ! ).
+text_edit_head('add-atom', [_, Atom]) :- !, may_change_interface(Atom).
+text_edit_head('remove-atom', [_, Atom]) :- !, may_change_interface(Atom).
+text_edit_head(eval, [E]) :- !, ( var(E) -> true ; compound(E), text_edits(E) ).
+text_edit_head(H, _) :- edits_world(H).
+
+translate_transient(Expr, Goals, Out) :- translate_transient(Expr, none, Goals, Out).
+translate_transient(Expr, Cut, Goals, Out) :-
+    in_unit(transient, Cut, translate_expr(Expr, Goals, Out), _, _).
+
+note_unit_token(Token) :-
+    ( translation_recording_active
+      -> nb_getval(petta_translation_uses, Box), arg(1, Box, Old), nb_setarg(1, Box, [token(Token)|Old])
+       ; true ).
+
+stretch_check(Check) :- ( nb_current(petta_unit, u(Kind, _, _, _)) -> true ; Kind = none ),
+                        ( Kind = stored(Token, Used) -> Used = true, Check = live_unit(Token)
+                        ; Kind == transient -> flag(petta_iface_rev, Revision, Revision), Check = interface_is(Revision)
+                        ; Check = fail ).
+
+stretch(Source, Gs, Fast, Gs, Fast) :- ( var(Source) ; atomic(Source) ; Source = [Q, _], Q == quote ), !.
+stretch(Source, Gs, Fast, [( Check -> Ahead ; Late )], Out) :-
+    term_variables(Source, Vs), copy_term_nat(Vs-Source, Template), numbervars(Template, 0, _),
+    goals_list_to_conj(Gs, Conj), stretch_check(Check),
+    ( var(Fast), \+ memberchk_eq(Fast, Vs) -> Out = Fast, Ahead = Conj
+                                            ; note_candidates(Out, Fast), Ahead = (Out = Fast, Conj) ),
+    ( stretch_cut(Source, Cut) -> Late = late_call(Template, Vs, Out, Cut)
+                                ; Late = late_call(Template, Vs, Out) ).
+stretch_conj(Source, Gs, Fast, Conj, Out) :- stretch(Source, Gs, Fast, Goals, Out), goals_list_to_conj(Goals, Conj).
+
+maybe_stretch(true, Expr, Gs0, Out0, Gs, Out) :- !, stretch(Expr, Gs0, Out0, Gs, Out).
+maybe_stretch(false, _, Gs, Out, Gs, Out).
+maybe_stretch_conj(true, Expr, Gs, Fast, Conj, Out) :- !, stretch_conj(Expr, Gs, Fast, Conj, Out).
+maybe_stretch_conj(false, _, Gs, Out, Conj, Out) :- goals_list_to_conj(Gs, Conj).
+either_true(false, false, false) :- !.
+either_true(_, _, true).
+
+live_conj(PriorEdited, Body, Conj, Out) :-
+    without_cut(counting(translate_expr(Body, Gs, Fast), BodyEdits)),
+    either_true(PriorEdited, BodyEdits, Live),
+    maybe_stretch_conj(Live, Body, Gs, Fast, Conj, Out).
+
+stretch_cut(Source, Cut) :-
+    nb_current(petta_unit, U), U = u(_, _, Cut, _), Cut \== none,
+    contains_direct_cut(Source),
+    nb_setarg(4, U, true).
+
+contains_direct_cut(X) :- is_list(X), X = [H|T],
+    ( H == cut, T == [] -> true
+    ; atom(H), ( H == quote ; cut_opaque_head(H) ) -> fail
+    ; ( contains_direct_cut(H) ; member(Arg, T), contains_direct_cut(Arg) ), ! ).
+
+cut_opaque_head(H) :- memberchk(H, [collapse, test, once, hyperpose, with_mutex, transaction,
+                                    catch, forall, foldall, 'foldl-atom', 'map-atom', 'filter-atom', '|->']).
+
+clause_cut_point(ClauseFrame, Cut) :-
+    prolog_current_choice(Ch),
+    choice_above_frame(Ch, ClauseFrame, Cut).
+
+choice_above_frame(Ch, Frame, Cut) :-
+    ( prolog_choice_attribute(Ch, frame, CF), CF >= Frame
+      -> prolog_choice_attribute(Ch, parent, Parent),
+         choice_above_frame(Parent, Frame, Cut)
+       ; Cut = Ch ).
+
+late_call(Template, Vars, Out) :- late_call(Template, Vars, Out, none).
+late_call(Template, Vars, Out, Cut) :-
+    varnumbers(Template, TemplateVars-Source),
+    translate_transient(Source, Cut, Goals, Value),
+    TemplateVars = Vars, Out = Value,
+    call_goals(Goals).
+
+split_args_at_edit([], [], [], [], false).
+split_args_at_edit([A|As], Gs, [V|Vs], Rest, Edited) :-
+    counting(translate_expr(A, GsA, V), AEdited),
+    ( AEdited == true
+      -> Gs = GsA, Vs = [], Rest = As, Edited = true
+       ; split_args_at_edit(As, GsRest, Vs, Rest, Edited),
+         append(GsA, GsRest, Gs) ).
+
+stretch_applied(Head, PreVals, Rest, StretchGs, Out) :-
+    length(PreVals, K), length(PrefixVars, K),
+    append(PrefixVars, Rest, ResidualArgs),
+    ( ( atom(Head) ; nonvar(Head), Head = partial(_, _) )
+      -> Residual = [Head|ResidualArgs], BindHead = true
+       ; Residual = [HeadVar|ResidualArgs], BindHead = (HeadVar = Head) ),
+    translate_expr(Residual, FastGs, FastOut),
+    stretch(Residual, FastGs, FastOut, StretchGs, Out),
+    call(BindHead),
+    PrefixVars = PreVals.
+
+stretch_wrapped(Wrapper, F, PreVals, Rest, StretchGs, Out) :-
+    length(PreVals, K), length(PrefixVars, K),
+    append(PrefixVars, Rest, ResidualArgs),
+    Residual = [Wrapper, [F|ResidualArgs]],
+    translate_expr(Residual, FastGs, FastOut),
+    stretch(Residual, FastGs, FastOut, StretchGs, Out),
+    PrefixVars = PreVals.
 
 user_dynamic_head(F, A, H) :-
     current_predicate(F/A),
@@ -934,9 +1107,11 @@ translate_expr(Expr, expected(_), Goals, Out) :-
         translate_expr(Expr, none, Goals, Out).
 translate_expr([H0|T0], Expectation, Goals, Out) :-
         safe_rewrite_streamops([H0|T0],[H|T]),
-        translate_expr(H, none, GsH, HV),
+        ( atom(H) -> GsH = [], HV = H, HeadEdited = false
+                   ; counting(translate_expr(H, none, GsH, HV), HeadEdited) ),
         %--- Translator rules ---:
-        ( nonvar(HV), translator_rule(HV) -> length(T, NHook),
+        ( nonvar(HV), translator_rule(HV) -> note_translation_use(HV, data),
+                                             length(T, NHook),
                                              ( once(fn_decl_arity(HV, NHook, ArgTypes, _))
                                                -> translate_args_by_type(T, ArgTypes, GsT, T1)
                                                 ; translate_args(T, GsT, T1) ),
@@ -976,7 +1151,7 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                                         disj_list(Branches, Disj),
                                                         append(GsH, [Disj], Goals)
         ; special_builtin_form(HV, T, collapse_all), T = [E]
-          -> translate_expr_to_conj(E, Conj, EV),
+          -> without_cut(translate_expr_to_conj(E, Conj, EV)),
                                      %always a list: one element type is carried, several
                                      %become a union, and an uncertain element type is
                                      %recorded as unknown, since an open ET would unify with
@@ -986,11 +1161,16 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                      ( ElemKnown == true -> true ; note_unknown_candidate(Out) ),
                                      append(GsH, [findall(EV, Conj, Out)], Goals)
         ; special_builtin_form(HV, T, cut), T = []
-          -> append(GsH, [(!)], Goals),
+          -> ( nb_current(petta_unit, u(transient, _, Cut, _)), Cut \== none
+               -> CutGoal = prolog_cut_to(Cut)
+                ; CutGoal = (!) ),
+             append(GsH, [CutGoal], Goals),
                                Out = true
         ; special_builtin_form(HV, T, test_collect), T = [Expr, Expected]
-          -> translate_expr_to_conj(Expr, Conj, Val),
-                                              translate_expr(Expected, GsE, ExpVal),
+          -> without_cut(counting(translate_expr_to_conj(Expr, Conj, Val), EE)),
+                                              counting(translate_expr(Expected, GsE0, ExpVal0), XE),
+                                              either_true(EE, XE, ELive),
+                                              maybe_stretch(ELive, Expected, GsE0, ExpVal0, GsE, ExpVal),
                                               Goal1 = ( findall(Val, Conj, Results),
                                                         (Results = [Actual] -> true
                                                                              ; Actual = Results ) ),
@@ -998,57 +1178,60 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                               append(G1, GsE, G2),
                                               append(G2, [test(Actual, ExpVal, Out)], Goals)
         ; special_builtin_form(HV, T, once), T = [X]
-          -> translate_expr_to_conj(X, Conj, Out),
+          -> without_cut(translate_expr_to_conj(X, Conj, Out)),
                                  append(GsH, [once(Conj)], Goals)
         ; special_builtin_form(HV, T, hyperpose), T = [L]
           -> ( nonvar(L), is_list(L)
-               -> build_hyperpose_branches(L, Branches),
+               -> without_cut(build_hyperpose_branches(L, Branches)),
                   maplist({Out}/[(_,Res)]>>note_candidates(Out, Res), Branches),
                   append(GsH, [concurrent_and(member((Goal,Res), Branches), (call(Goal), Out = Res))], Goals)
                ; translate_expr(L, GsL, LV),
                  append(GsH, GsL, Inner),
-                 append(Inner, [hyperpose_runtime(LV, Out)], Goals) )
+                 append(Inner, [hyperpose_runtime(LV, Out)], Goals),
+                 note_edit )
         ; special_builtin_form(HV, T, with_mutex), T = [M,X]
-          -> translate_expr_to_conj(X, Conj, Out),
+          -> without_cut(translate_expr_to_conj(X, Conj, Out)),
                                          append(GsH, [with_mutex(M,Conj)], Goals)
         ; special_builtin_form(HV, T, transaction), T = [X]
-          -> translate_expr_to_conj(X, Conj, Out),
+          -> without_cut(translate_expr_to_conj(X, Conj, Out)),
                                         append(GsH, [with_definition_update(Conj)], Goals)
         %--- Sequential execution ---:
         ; special_builtin_form(HV, T, progn), T = Exprs
-          -> translate_args(Exprs, GsList, Outs),
-                                    append(GsH, GsList, Tmp),
-                                    last(Outs, Out),
-                                    Goals = Tmp
-        ; special_builtin_form(HV, T, prog1), T = Exprs
-          -> Exprs = [First|Rest],
-                                    translate_expr(First, GsF, Out),
-                                    translate_args(Rest, GsRest, _),
-                                    append(GsH, GsF, Tmp1),
-                                    append(Tmp1, GsRest, Goals)
+          -> translate_progn(Exprs, Expectation, GsList, Out),
+                                    append(GsH, GsList, Goals)
+        ; special_builtin_form(HV, T, prog1), T = [First|Rest]
+          -> counting(translate_expr(First, Expectation, GsF, Out), FEdits),
+             ( Rest == [] -> GsRest = []
+             ; counting(translate_progn(Rest, none, GsR0, ROut0), REdits),
+               either_true(FEdits, REdits, RLive),
+               maybe_stretch(RLive, [progn|Rest], GsR0, ROut0, GsRest, _) ),
+             append([GsH, GsF, GsRest], Goals)
         %--- Conditionals ---:
         ; special_builtin_form(HV, T, if_then), T = [Cond, Then]
-          -> translate_if_cond(Cond, ConC, CondGoal),
+          -> counting(translate_if_cond(Cond, ConC, CondGoal), CE),
                                         with_unified_edge_facts(
                                             Cond, true,
-                                            ( translate_expr_to_conj(
-                                                  Then, Expectation, ConT, Tv),
+                                            ( counting(translate_expr(Then, Expectation, GThen, Tv0), TE),
+                                              either_true(CE, TE, Live),
+                                              maybe_stretch_conj(Live, Then, GThen, Tv0, ConT, Tv),
                                               build_isolated_branch(
                                                   ConT, Tv, Out, BT) )),
                                         ( ConC == true -> append(GsH, [ ( CondGoal -> BT ) ], Goals)
                                                         ; append(GsH, [ ( ConC, ( CondGoal -> BT ) ) ], Goals) )
         ; special_builtin_form(HV, T, if_then_else), T = [Cond, Then, Else]
-          -> translate_if_cond(Cond, ConC, CondGoal),
+          -> counting(translate_if_cond(Cond, ConC, CondGoal), CE),
                                               with_unified_edge_facts(
                                                   Cond, true,
-                                                  ( translate_expr_to_conj(
-                                                        Then, Expectation, ConT, Tv),
+                                                  ( counting(translate_expr(Then, Expectation, GThen, Tv0), TE),
+                                                    either_true(CE, TE, TL),
+                                                    maybe_stretch_conj(TL, Then, GThen, Tv0, ConT, Tv),
                                                     build_isolated_branch(
                                                         ConT, Tv, Out, BT) )),
                                               with_unified_edge_facts(
                                                   Cond, false,
-                                                  ( translate_expr_to_conj(
-                                                        Else, Expectation, ConE, Ev),
+                                                  ( counting(translate_expr(Else, Expectation, GElse, Ev0), EE),
+                                                    either_true(CE, TE, L0), either_true(L0, EE, EL),
+                                                    maybe_stretch_conj(EL, Else, GElse, Ev0, ConE, Ev),
                                                     build_isolated_branch(
                                                         ConE, Ev, Out, BE) )),
                                               ( ConC == true -> append(GsH, [ (CondGoal -> BT ; BE) ], Goals)
@@ -1066,21 +1249,25 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                                     subsumes_term(['Empty', _], Found0),
                                                     Found0 = ['Empty', DefaultExpr],
                                                     NormalCases = Rest0
-                                                    -> translate_expr_to_conj(KeyExpr, GkConj, Kv),
-                                                       translate_case(NormalCases, Kv, Expectation, Out, CaseGoal, KeyGoal),
-                                                       translate_expr_to_conj(DefaultExpr, Expectation, ConD, DOut),
+                                                    -> counting(translate_expr_to_conj(KeyExpr, GkConj, Kv), KE),
+                                                       translate_case(NormalCases, KE, Kv, Expectation, Out, CaseGoal, KeyGoal),
+                                                       counting(translate_expr(DefaultExpr, Expectation, GDef, DOut0), DE),
+                                                       either_true(KE, DE, DLive),
+                                                       maybe_stretch_conj(DLive, DefaultExpr, GDef, DOut0, ConD, DOut),
                                                        build_branch(ConD, DOut, Out, DefaultThen),
                                                        case_with_empty(GkConj, CaseGoal, DefaultThen, Combined),
                                                        append([GsH, KeyGoal, [Combined]], Goals)
-                                                     ; translate_expr(KeyExpr, Gk, Kv),
-                                                       translate_case(PairsExpr, Kv, Expectation, Out, IfGoal, KeyGoal),
+                                                     ; counting(translate_expr(KeyExpr, Gk, Kv), KE),
+                                                       translate_case(PairsExpr, KE, Kv, Expectation, Out, IfGoal, KeyGoal),
                                                        append([GsH, Gk, KeyGoal, [IfGoal]], Goals) )
         %--- Short-circuit boolean operators ---:
         ; special_builtin_form(HV, T, and_then), T = [A, B]
-          -> translate_expr_to_conj(A, ConjA, Av),
+          -> counting(translate_expr_to_conj(A, ConjA, Av), AE),
                                            with_unified_edge_facts(
                                                A, true,
-                                               ( translate_expr_to_conj(B, ConjB, Bv),
+                                               ( counting(translate_expr(B, GsB0, Bv0), BE),
+                                                 either_true(AE, BE, Live),
+                                                 maybe_stretch_conj(Live, B, GsB0, Bv0, ConjB, Bv),
                                                  check_call_arg(
                                                      declared, 'and-then', Bv,
                                                      'Bool', GsB),
@@ -1090,10 +1277,12 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                            set_out_type(Out, 'Bool'),
                                            append(GsH, [(ConjA, GA, (Av == true -> (ConjB, GB, Out = Bv) ; Out = false))], Goals)
         ; special_builtin_form(HV, T, or_else), T = [A, B]
-          -> translate_expr_to_conj(A, ConjA, Av),
+          -> counting(translate_expr_to_conj(A, ConjA, Av), AE),
                                           with_unified_edge_facts(
                                               A, false,
-                                              ( translate_expr_to_conj(B, ConjB, Bv),
+                                              ( counting(translate_expr(B, GsB0, Bv0), BE),
+                                                either_true(AE, BE, Live),
+                                                maybe_stretch_conj(Live, B, GsB0, Bv0, ConjB, Bv),
                                                 check_call_arg(
                                                     declared, 'or-else', Bv,
                                                     'Bool', GsB),
@@ -1104,11 +1293,13 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                           append(GsH, [(ConjA, GA, (Av == true -> Out = true ; (ConjB, GB, Out = Bv)))], Goals)
         %--- Unification constructs ---:
         ; special_builtin_form(HV, T, let_bind), T = [Pat, Val, In]
-          -> translate_expr(Pat, Gp, Pv),
-                                                           translate_let_value(Pat, Val, In, Gv, V),
+          -> counting(translate_expr(Pat, Gp, Pv), PatEdits),
+                                                           counting(translate_let_value(Pat, Val, In, Gv, V), ValEdits),
                                                            note_candidates(Pv, V),        %the bound variable gets the value's type
                                                            bind_pattern_from(Pat, V),     %destructuring patterns type their fields
-                                                           translate_expr(In, Expectation, Gi, Out),
+                                                           counting(translate_expr(In, Expectation, Gi0, Out0), InEdits),
+                                                           either_true(PatEdits, ValEdits, L0), either_true(L0, InEdits, Live),
+                                                           maybe_stretch(Live, In, Gi0, Out0, Gi, Out),
                                                            append([GsH,[(Pv=V)],Gp,Gv,Gi], Goals)
         ; special_builtin_form(HV, T, let_star), T = [Binds, Body]
           -> letstar_to_rec_let(Binds,Body,RecLet),
@@ -1119,61 +1310,66 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                             Goals = [copy_term(Vars,[Con,Val],_,[Ncon,Out]),Ncon]
         %--- Iterating over non-deterministic generators without reification ---:
         ; special_builtin_form(HV, T, forall), T = [GF, TF]
-          -> ( is_list(GF) -> GF = [GFH|GFA],
-                              translate_expr(GFH, GsGFH, GFHV),
-                              translate_args(GFA, GsGFA, GFAv),
-                              append(GsGFH, GsGFA, GsGF),
-                              GenList = [GFHV|GFAv]
-                            ; translate_expr(GF, GsGF, GFHV),
-                              GenList = [GFHV] ),
-             translate_expr(TF, GsTF, TFHV),
+          -> without_cut((
+               ( is_list(GF) -> GF = [GFH|GFA],
+                                translate_expr(GFH, GsGFH, GFHV),
+                                translate_args(GFA, GsGFA, GFAv),
+                                append(GsGFH, GsGFA, GsGF),
+                                GenList = [GFHV|GFAv]
+                              ; translate_expr(GF, GsGF, GFHV),
+                                GenList = [GFHV] ),
+               translate_expr(TF, GsTF, TFHV) )),
              TestList = [TFHV, V],
              goals_list_to_conj(GsGF, GPre),
              GenGoal = (GPre, reduce(GenList, V)),
              append(GsH, GsTF, Tmp0),
              set_out_type(Out, 'Bool'),
-             append(Tmp0, [( forall(GenGoal, ( reduce(TestList, Truth), Truth == true )) -> Out = true ; Out = false )], Goals)
+             append(Tmp0, [( forall(GenGoal, ( reduce(TestList, Truth), Truth == true )) -> Out = true ; Out = false )], Goals),
+             note_edit
         ; special_builtin_form(HV, T, foldall), T = [AF, GF, InitS]
-          -> translate_expr_to_conj(InitS, ConjInit, Init),
-             translate_expr(AF, GsAF, AFV),
-             ( GF = [M|_], (M==match ; M==let ; M=='let*') -> LambdaGF = ['|->', [], GF],
-                                                              translate_expr(LambdaGF, GsGF, GFHV),
-                                                              GenList = [GFHV]
-             ; is_list(GF) -> GF = [GFH|GFA],
-                              translate_expr(GFH, GsGFH, GFHV),
-                              translate_args(GFA, GsGFA, GFAv),
-                              append(GsGFH, GsGFA, GsGF),
-                              GenList = [GFHV|GFAv]
-                            ; translate_expr(GF, GsGF, GFHV),
-                              GenList = [GFHV] ),
+          -> without_cut((
+               translate_expr_to_conj(InitS, ConjInit, Init),
+               translate_expr(AF, GsAF, AFV),
+               ( GF = [M|_], (M==match ; M==let ; M=='let*') -> LambdaGF = ['|->', [], GF],
+                                                                translate_expr(LambdaGF, GsGF, GFHV),
+                                                                GenList = [GFHV]
+               ; is_list(GF) -> GF = [GFH|GFA],
+                                translate_expr(GFH, GsGFH, GFHV),
+                                translate_args(GFA, GsGFA, GFAv),
+                                append(GsGFH, GsGFA, GsGF),
+                                GenList = [GFHV|GFAv]
+                              ; translate_expr(GF, GsGF, GFHV),
+                                GenList = [GFHV] ) )),
              append(GsH, GsAF, Tmp1),
              append(Tmp1, GsGF, Tmp2),
              foldall_out_type(AFV, Init, Out),
-             append(Tmp2, [ConjInit, foldall(agg_reduce(AFV, V), reduce(GenList, V), Init, Out)], Goals)
+             append(Tmp2, [ConjInit, foldall(agg_reduce(AFV, V), reduce(GenList, V), Init, Out)], Goals),
+             note_edit
         %--- Higher-order functions with pseudo-lambdas and lambdas ---:
         ; special_builtin_form(HV, T, foldl_pseudo_lambda),
           T = [List, Init, AccVar, XVar, Body]
-          -> translate_expr_to_conj(List, ConjList, L),
-             translate_expr_to_conj(Init, ConjInit, InitV),
+          -> counting(translate_expr_to_conj(List, ConjList, L), LE),
+             counting(translate_expr_to_conj(Init, ConjInit, InitV), IE),
              note_list_elem_type(XVar, L),
-             translate_expr_to_conj(Body, BodyConj, BG),
+             either_true(LE, IE, PreE),
+             live_conj(PreE, Body, BodyConj, BG),
              exclude(==(true), [ConjList, ConjInit], CleanConjs),
              append(GsH, CleanConjs, GsMid),
              append(GsMid, [foldl([XVar, AccVar, NewAcc]>>(BodyConj, ( number(BG) -> NewAcc is BG ; NewAcc = BG )), L, InitV, Out)], Goals)
         ; special_builtin_form(HV, T, map_pseudo_lambda),
           T = [List, XVar, Body]
-          -> translate_expr_to_conj(List, ConjList, L),
+          -> counting(translate_expr_to_conj(List, ConjList, L), LE),
              note_list_elem_type(XVar, L),
-             translate_expr_to_conj(Body, BodyCallConj, BodyCall),
+             live_conj(LE, Body, BodyCallConj, BodyCall),
              ( value_single_type(BodyCall, BT) -> set_out_type(Out, ['List', BT]) ; true ),
              exclude(==(true), [ConjList], CleanConjs),
              append(GsH, CleanConjs, GsMid),
              append(GsMid, [maplist([XVar, Y]>>(BodyCallConj, ( number(BodyCall) -> Y is BodyCall ; Y = BodyCall )), L, Out)], Goals)
         ; special_builtin_form(HV, T, filter_pseudo_lambda),
           T = [List, XVar, Cond]
-          -> translate_expr_to_conj(List, ConjList, L),
+          -> counting(translate_expr_to_conj(List, ConjList, L), LE),
              note_list_elem_type(XVar, L),
-             translate_expr_to_conj(Cond, CondConj, CondGoal),
+             live_conj(LE, Cond, CondConj, CondGoal),
              exclude(==(true), [ConjList], CleanConjs),
              append(GsH, CleanConjs, GsMid),
              append(GsMid, [include([XVar]>>(CondConj, CondGoal), L, Out)], Goals)
@@ -1216,16 +1412,19 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                                                    typed_space_update_goal(HV, Space, Atom, Update),
                                                                    Goal =.. [Update,S,Atom,Out],
                                                                    set_out_type(Out, 'Bool'),
-                                                                   append([GsH,G1,[Goal]], Goals)
+                                                                   append([GsH,G1,[Goal]], Goals),
+                                                                   ( may_change_interface(Atom) -> note_edit ; true )
         ; special_builtin_form(HV, T, typed_space_match),
-          T = [Space, Pattern, Body] -> translate_expr(Space, G1, S),
+          T = [Space, Pattern, Body] -> counting(translate_expr(Space, G1, S), SE),
                                                      type_match_pattern(Pattern),
                                                      bind_typed_space_pattern(Space, Pattern),
                                                      elaborate_typed_space_pattern(
                                                          Space, Pattern,
                                                          RuntimePattern,
                                                          PatternGoals),
-                                                     translate_expr(Body, Expectation, GsB, Out),
+                                                     counting(translate_expr(Body, Expectation, GsB0, Out0), BodyEdits),
+                                                     either_true(SE, BodyEdits, Live),
+                                                     maybe_stretch(Live, Body, GsB0, Out0, GsB, Out),
                                                      %Elaborated outputs are bound
                                                      %first, then functional
                                                      %constraints, then the body.
@@ -1238,48 +1437,64 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
         %--- Predicate to compiled goal ---:
         ; special_builtin_form(HV, T, translate_predicate), T = [Expr]
           -> Expr = [S|Args],
-                                                  translate_args(Args, GsArgs, ArgsOut),
-                                                  Goal =.. [S|ArgsOut],
-                                                  append(GsH, GsArgs, Inner),
-                                                  append(Inner, [Goal], Goals)
+                                                  split_args_at_edit(Args, PreGs, PreVals, RestArgs, ArgEdited),
+                                                  ( ArgEdited == true
+                                                    -> stretch_wrapped(translatePredicate, S, PreVals, RestArgs, StretchGs, Out),
+                                                       append([GsH, PreGs, StretchGs], Goals)
+                                                     ; Goal =.. [S|PreVals],
+                                                       append(GsH, PreGs, Inner),
+                                                       append(Inner, [Goal], Goals) )
         %--- Manual dispatch options: ---
         %Generate a predicate call on compilation, translating Args for nesting:
         ; special_builtin_form(HV, T, manual_call), T = [Expr]
           -> Expr = [F|Args],
-                                     translate_args(Args, GsArgs, ArgsOut),
-                                     append(GsH, GsArgs, Inner),
-                                     append(ArgsOut, [Out], CallArgs),
-                                     Goal =.. [F|CallArgs],
-                                     length(Args, NC),
-                                     manual_dispatch_arg_checks_status(F, NC, ArgsOut,
-                                                                       GuardGs, ArgStatus),
-                                     ( ArgStatus == verified
-                                       -> set_unique_decl_out(F, NC, Out)
-                                     ; true ),
-                                     append(Inner, GuardGs, Inner1),
-                                     append(Inner1, [Goal], Goals)
+                                     ( atom(F) -> length(Args, FN), note_translation_use(F, call(FN)),
+                                                  ( edits_world(F) -> note_edit ; true )
+                                                ; note_edit ),
+                                     split_args_at_edit(Args, PreGs, PreVals, RestArgs, ArgEdited),
+                                     ( ArgEdited == true
+                                       -> stretch_wrapped(call, F, PreVals, RestArgs, StretchGs, Out),
+                                          append([GsH, PreGs, StretchGs], Goals)
+                                        ; append(GsH, PreGs, Inner),
+                                          append(PreVals, [Out], CallArgs),
+                                          Goal =.. [F|CallArgs],
+                                          length(Args, NC),
+                                          manual_dispatch_arg_checks_status(F, NC, PreVals,
+                                                                            GuardGs, ArgStatus),
+                                          ( ArgStatus == verified
+                                            -> set_unique_decl_out(F, NC, Out)
+                                          ; true ),
+                                          append(Inner, GuardGs, Inner1),
+                                          append(Inner1, [Goal], Goals) )
         %Produce a dynamic dispatch, translating Args for nesting:
         ; special_builtin_form(HV, T, dynamic_reduce), T = [Expr]
           -> ( var(Expr) -> translate_expr(Expr, GsH, ExprOut),
-                                                     Goals = [reduce(ExprOut, Out)|GsH]
+                                                     Goals = [reduce(ExprOut, Out)|GsH], note_edit
                                                    ; Expr = [F|Args],
-                                                     translate_args(Args, GsArgs, ArgsOut),
-                                                     append(GsH, GsArgs, Inner),
-                                                     ExprOut = [F|ArgsOut],
-                                                     length(Args, NR),
-                                                     manual_dispatch_arg_checks_status(F, NR, ArgsOut,
-                                                                                       GuardGs, ArgStatus),
-                                                     ( ArgStatus == verified
-                                                       -> set_unique_decl_out(F, NR, Out)
-                                                     ; true ),
-                                                     append(Inner, GuardGs, Inner1),
-                                                     append(Inner1, [reduce(ExprOut, Out)], Goals) )
+                                                     ( atom(F) -> length(Args, FN), note_translation_use(F, call(FN)),
+                                                                  ( edits_world(F) -> note_edit ; true )
+                                                                ; note_edit ),
+                                                     split_args_at_edit(Args, PreGs, PreVals, RestArgs, ArgEdited),
+                                                     ( ArgEdited == true
+                                                       -> stretch_wrapped(reduce, F, PreVals, RestArgs, StretchGs, Out),
+                                                          append([GsH, PreGs, StretchGs], Goals)
+                                                        ; append(GsH, PreGs, Inner),
+                                                          ExprOut = [F|PreVals],
+                                                          length(Args, NR),
+                                                          manual_dispatch_arg_checks_status(F, NR, PreVals,
+                                                                                            GuardGs, ArgStatus),
+                                                          ( ArgStatus == verified
+                                                            -> set_unique_decl_out(F, NR, Out)
+                                                          ; true ),
+                                                          append(Inner, GuardGs, Inner1),
+                                                          append(Inner1, [reduce(ExprOut, Out)], Goals) ) )
         %Invoke translator to evaluate MeTTa code as data/list:
         ; special_builtin_form(HV, T, eval_source), T = [Arg]
           -> ( nonvar(Arg), Arg = [Q, Quoted], Q == quote
                                      -> translate_expr(Quoted, GsQ, Out),           %(eval (quote E)) == E
                                         append(GsH, GsQ, Goals)
-                                      ; append(GsH, [eval(Arg, Out)], Goals) )
+                                      ; append(GsH, [eval(Arg, Out)], Goals),
+                                        note_eval(Arg) )
         %Erased branding of a semantic role: knowledge only, no runtime goal:
         ; special_builtin_form(HV, T, brand), T = [TypeExpr, Expr]
           -> normalize_type(TypeExpr, TN),
@@ -1310,7 +1525,7 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
                                      Out = Expr,
                                      Goals = Inner
         ; special_builtin_form(HV, T, catch), T = [Expr] ->
-          translate_expr(Expr, GsExpr, ExprOut),
+          without_cut(translate_expr(Expr, GsExpr, ExprOut)),
           append(GsH, [], Inner),
           goals_list_to_conj(GsExpr, Conj),
           Goal = catch((Conj, Out = ExprOut),
@@ -1326,43 +1541,56 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
           append(Inner, [Goal], Goals)
         %--- Automatic 'smart' dispatch, translator deciding when to create a predicate call, data list, or dynamic dispatch: ---
         %Known function or closure => type-directed call:
-        ; ( atom(HV), fun(HV) -> Fun = HV, Bound = []
+        ; is_list(T),
+          ( atom(HV), fun(HV) -> Fun = HV, Bound = []
           ; compound(HV), HV = partial(Fun, Bound) )
-          -> translate_typed_call(Fun, Bound, T, GsH, Goals, Out)
+          -> translate_typed_call(Fun, Bound, T, HeadEdited, GsH, Goals, Out)
+        ; HeadEdited == true, is_list(T) ->
+            stretch_applied(HV, [], T, StretchGs, Out),
+            append(GsH, StretchGs, Goals)
         %Literals (numbers, strings, etc.), known non-function atom => data:
         ; ( atomic(HV), \+ atom(HV) ; atom(HV), \+ fun(HV) )
           -> ( atom(HV) -> note_translation_use(HV, data) ; true ),
-             translate_args(T, GsT, AVs),
-             append(GsH, GsT, Goals),
-             Out = [HV|AVs]
+             split_args_at_edit(T, PreGs, PreVals, RestArgs, ArgEdited),
+             ( ArgEdited == true
+               -> stretch_applied(HV, PreVals, RestArgs, StretchGs, Out),
+                  append([GsH, PreGs, StretchGs], Goals)
+                ; append(GsH, PreGs, Goals),
+                  Out = [HV|PreVals] )
         %The head is already translated; re-evaluation would run quoted data.
-        ; is_list(HV) -> translate_args(T, GsT, AVs),
-                         append(GsH, GsT, Goals),
-                         Out = [HV|AVs]
+        ; is_list(HV) -> split_args_at_edit(T, PreGs, PreVals, RestArgs, ArgEdited),
+                         ( ArgEdited == true
+                           -> stretch_applied(HV, PreVals, RestArgs, StretchGs, Out),
+                              append([GsH, PreGs, StretchGs], Goals)
+                            ; append(GsH, PreGs, Goals),
+                              Out = [HV|PreVals] )
         %Unknown head (var/compound) => runtime dispatch, with a lean closure
         %application when the head's arrow type is known or assumed. A head
         %whose known type is provably not a function (e.g. Number) makes the
         %expression data construction, compiled and typed as such:
-        ; translate_args(T, GsT, AVs),
-          append(GsH, GsT, Inner),
-          %A singleton ($x) calls $x when its type is a nullary arrow, is a
-          %one-element list when its type is known otherwise (a declared $a
-          %included), and is dispatched at runtime when its type is only an
-          %inference assumption:
-          ( var(HV), AVs == []
-            -> ( known_singleton(HV, K), nonvar(K), K = [H, OutT], arrow_atom(H)
-                 -> closure_apply_goal(HV, [], Out, Goal),
-                    append(Inner, [Goal], Goals),
-                    ( var(Out), var(OutT) -> add_known_type(Out, OutT) ; set_out_type(Out, OutT) )
-               ; known_singleton(HV, K), ( nonvar(K) ; param_promise_var(K) )
-                 -> Out = [HV],
+        ; split_args_at_edit(T, PreGs, PreVals, RestArgs, ArgEdited),
+          ( ArgEdited == true
+            -> stretch_applied(HV, PreVals, RestArgs, StretchGs, Out),
+               append([GsH, PreGs, StretchGs], Goals)
+             ; append(GsH, PreGs, Inner),
+               %A singleton ($x) calls $x when its type is a nullary arrow, is a
+               %one-element list when its type is known otherwise (a declared $a
+               %included), and is dispatched at runtime when its type is only an
+               %inference assumption:
+               ( var(HV), PreVals == []
+                 -> ( known_singleton(HV, K), nonvar(K), K = [H, OutT], arrow_atom(H)
+                      -> closure_apply_goal(HV, [], Out, Goal),
+                         append(Inner, [Goal], Goals), note_edit,
+                         ( var(Out), var(OutT) -> add_known_type(Out, OutT) ; set_out_type(Out, OutT) )
+                    ; known_singleton(HV, K), ( nonvar(K) ; param_promise_var(K) )
+                      -> Out = [HV],
+                         Goals = Inner
+                    ; append(Inner, [reduce([HV], Out)], Goals), note_edit )
+               ; translate_closure_call(HV, PreVals, Inner, Goals, Out) -> note_edit
+               ; var(HV), known_singleton(HV, K), nonfunction_type(K)
+                 -> Out = [HV|PreVals],
                     Goals = Inner
-               ; append(Inner, [reduce([HV], Out)], Goals) )
-          ; translate_closure_call(HV, AVs, Inner, Goals, Out) -> true
-          ; var(HV), known_singleton(HV, K), nonfunction_type(K)
-            -> Out = [HV|AVs],
-               Goals = Inner
-          ; append(Inner, [reduce([HV|AVs], Out)], Goals) ) ).
+               ; append(Inner, [reduce([HV|PreVals], Out)], Goals), note_edit ) ) ).
 
 %Values of these types can never dispatch as functions in reduce/2:
 nonfunction_type(K) :- nonvar(K), ( primitive_type(K)
@@ -1449,13 +1677,15 @@ safe_apply(Goal) :- catch(Goal, error(existence_error(procedure, _), _), fail).
 %Type-directed function call: check declared types at compile time, resolve
 %overloads statically when possible, and emit runtime guards only where types
 %stay unresolved (see AGENTS.md).
-translate_typed_call(Fun, Bound, Args, GsH, Goals, Out) :-
+translate_typed_call(Fun, Bound, Args, Live0, GsH, Goals, Out) :-
         length(Args, NProv), length(Bound, NB), NTotal is NProv + NB,
         note_typed_call_use(Fun, NTotal),
+        ( edits_world(Fun) -> note_edit ; true ),
+        ( Bound == [] -> Head = Fun ; Head = partial(Fun, Bound) ),
         findall(ft(ATs, OT), fn_decl_arity(Fun, NTotal, ATs, OT), FullDecls),
         ( FullDecls \== []
           -> eff_arg_types(FullDecls, NB, NProv, EffTs),
-             translate_typed_args(Fun, FullDecls, Args, EffTs, GsT, AVs0),
+             translate_typed_args(Fun, FullDecls, Args, EffTs, Live0, GsT, AVs0),
              append(Bound, AVs0, AVs),
              ( FullDecls = [Single] -> Chosen = Single, MultiDecl = false
              ; MultiDecl = true,
@@ -1481,46 +1711,46 @@ translate_typed_call(Fun, Bound, Args, GsH, Goals, Out) :-
                   overload_call(Fun, AVs, Out, Survs, Dispatch),
                   append(GsH, GsT, Pre),
                   append(Pre, [goal_or_throw(Dispatch, error(no_matching_overload(Fun), typecheck))], Goals) )
-        ; findall(pt(PTs, RTs, OT), fn_decl_partial(Fun, NTotal, PTs, RTs, OT, _), PartDecls),
-          PartDecls = [pt(PTs, _, _)]
-          -> translate_args(Args, GsT, AVs0),                      %typed partial application
-             append(Bound, AVs0, AVs),
-             apply_call_args(declared, Fun, AVs, PTs, GuardGs),
-             append([GsH, GsT, GuardGs], Inner),
-             build_direct_call(Fun, AVs, AVs, Out, Inner, [], Goals)
-        ; assumed_self_decl(Fun, NTotal, PTs, OutTv)
-          -> translate_args(Args, GsT, AVs0),                      %self-recursion under the provisional type
-             append(Bound, AVs0, AVs),                             %(before the store: earlier clauses' inference
-             apply_call_args(inferred, Fun, AVs, PTs, GuardGs),    %is stale while later clauses widen it)
-             append([GsH, GsT, GuardGs], Inner),
-             build_call_or_partial(Fun, AVs, AVs, Out, Inner, [], Goals),
-             ( var(Out) -> add_known_type(Out, OutTv) ; true )
-        ; findall(it(IATs, IOT), inferred_decl_arity(Fun, NTotal, IATs, IOT), [it(IATs, IOT)])
-          -> translate_args(Args, GsT, AVs0),                      %inferred type: knowledge only, never rejects
-             append(Bound, AVs0, AVs),
-             apply_call_args(inferred, Fun, AVs, IATs, GuardGs),
-             append([GsH, GsT, GuardGs], Inner),
-             build_call_or_partial(Fun, AVs, AVs, Out, Inner, [], Goals),
-             set_out_type(Out, IOT)
-        ; translate_args(Args, GsT, AVs0),                         %no type information
-          append(Bound, AVs0, AVs),
-          append(GsH, GsT, Inner),
-          build_call_or_partial(Fun, AVs, AVs, Out, Inner, [], Goals),
-          ( untyped_call_out(Fun, AVs, Out) -> true ; true ) ).
+        ; Live0 == true
+          -> stretch_applied(Head, [], Args, StretchGs, Out),
+             append(GsH, StretchGs, Goals)
+        ; split_args_at_edit(Args, PreGs, PreVals, RestArgs, ArgEdited),
+          ( ArgEdited == true
+            -> stretch_applied(Head, PreVals, RestArgs, StretchGs, Out),
+               append([GsH, PreGs, StretchGs], Goals)
+             ; append(Bound, PreVals, AVs),
+               ( findall(pt(PTs, RTs, OT), fn_decl_partial(Fun, NTotal, PTs, RTs, OT, _), PartDecls),
+                 PartDecls = [pt(PTs, _, _)]
+                 -> apply_call_args(declared, Fun, AVs, PTs, GuardGs),
+                    append([GsH, PreGs, GuardGs], Inner),
+                    build_direct_call(Fun, AVs, AVs, Out, Inner, [], Goals)
+               ; assumed_self_decl(Fun, NTotal, PTs, OutTv)
+                 -> apply_call_args(inferred, Fun, AVs, PTs, GuardGs),
+                    append([GsH, PreGs, GuardGs], Inner),
+                    build_call_or_partial(Fun, AVs, AVs, Out, Inner, [], Goals),
+                    ( var(Out) -> add_known_type(Out, OutTv) ; true )
+               ; findall(it(IATs, IOT), inferred_decl_arity(Fun, NTotal, IATs, IOT), [it(IATs, IOT)])
+                 -> apply_call_args(inferred, Fun, AVs, IATs, GuardGs),
+                    append([GsH, PreGs, GuardGs], Inner),
+                    build_call_or_partial(Fun, AVs, AVs, Out, Inner, [], Goals),
+                    set_out_type(Out, IOT)
+               ; append(GsH, PreGs, Inner),
+                 build_call_or_partial(Fun, AVs, AVs, Out, Inner, [], Goals),
+                 ( untyped_call_out(Fun, AVs, Out) -> true ; true ) ) ) ).
 
 %At a uniquely declared call site, closure arguments first resolve shared type
 %variables in the declaration, so a remaining product/list argument can get
 %contextual construction typing. apply_call_args stays the single enforcement
 %site, and goal order stays source order.
-translate_typed_args(_, [ft(ATs, _)], Args, EffTs, Goals, Values) :-
+translate_typed_args(_, [ft(ATs, _)], Args, EffTs, false, Goals, Values) :-
         length(ATs, NDecl), length(Args, NProv), NB is NDecl - NProv, NB >= 0,
         length(BoundTs, NB), append(BoundTs, DeclTs, ATs),
         closure_contextual_positions(DeclTs), !,
         translate_declared_arrows(Args, EffTs, DeclTs, Staged),
-        translate_contextual_args(Staged, GoalLists, Values),
+        translate_contextual_args(Staged, false, GoalLists, Values),
         append(GoalLists, Goals).
-translate_typed_args(_, _, Args, EffTs, Goals, Values) :-
-        translate_args_by_type(Args, EffTs, Goals, Values).
+translate_typed_args(_, _, Args, EffTs, Live0, Goals, Values) :-
+        translate_args_by_type(Args, EffTs, Live0, Goals, Values).
 
 closure_contextual_positions(Ts) :-
         nth0(ClosureI, Ts, ClosureT), is_arrow_type(ClosureT),
@@ -1530,9 +1760,9 @@ closure_contextual_positions(Ts) :-
 translate_declared_arrows([], [], [], []).
 translate_declared_arrows([A|As], [ET|ETs], [DT|DTs], [S|Ss]) :-
         ( is_arrow_type(DT)
-          -> translate_expr(A, G, V),
+          -> counting(translate_expr(A, G, V), AEdited),
              ( argument_resolves_declared_type(V, DT) -> true ; true ),
-             S = translated(G, V)
+             S = translated(A, G, V, AEdited)
            ; S = pending(A, ET, DT) ),
         translate_declared_arrows(As, ETs, DTs, Ss).
 
@@ -1541,16 +1771,21 @@ argument_resolves_declared_type(V, DeclT) :-
                  ; value_single_type(V, Actual) ),
         type_unify(Actual, DeclT).
 
-translate_contextual_args([], [], []).
-translate_contextual_args([translated(G, V)|Ss], [G|Gs], [V|Vs]) :-
-        translate_contextual_args(Ss, Gs, Vs).
-translate_contextual_args([pending(A, ET, DT)|Ss], [G|Gs], [V|Vs]) :-
+translate_contextual_args([], _, [], []).
+translate_contextual_args([translated(A, G0, V0, AEdited)|Ss], Live, [G|Gs], [V|Vs]) :-
+        maybe_stretch(Live, A, G0, V0, G, V),
+        either_true(Live, AEdited, Live1),
+        translate_contextual_args(Ss, Live1, Gs, Vs).
+translate_contextual_args([pending(A, ET, DT)|Ss], Live, [G|Gs], [V|Vs]) :-
         ( contextual_expected_type(DT), \+ expression_typed(ET)
-          -> translate_expr(A, expected(DT), G, V)
+          -> counting(translate_expr(A, expected(DT), G0, V0), AEdited),
+             maybe_stretch(Live, A, G0, V0, G, V)
         ; expression_typed(ET)
-          -> expression_arg_value(A, V), G = []
-           ; translate_expr(A, G, V) ),
-        translate_contextual_args(Ss, Gs, Vs).
+          -> expression_arg_value(A, V), G = [], AEdited = false
+           ; counting(translate_expr(A, G0, V0), AEdited),
+             maybe_stretch(Live, A, G0, V0, G, V) ),
+        either_true(Live, AEdited, Live1),
+        translate_contextual_args(Ss, Live1, Gs, Vs).
 
 %A contextual producer may be staged in an earlier let* binding, too early for
 %its consumer call. Look ahead through the remaining let/let* spine for a
@@ -1798,12 +2033,15 @@ commit_call(Fun, Src, AVs, Out, Goal0, Goal) :- ( oracle_det_mode(false), commit
                                                    ; oracle_det_wrap(Fun, AVs, Out, Goal0, Goal) ).
 
 %Selectively translate non-Atom args while Atom args stay as data input:
-translate_args_by_type([], _, [], []) :- !.
-translate_args_by_type([A|As], [T|Ts], GsOut, [AV|AVs]) :-
-                      ( expression_typed(T) -> expression_arg_value(A, AV), GsA = []
-                                           ; translate_expr(A, GsA, AV) ),
-                      translate_args_by_type(As, Ts, GsRest, AVs),
-                      append(GsA, GsRest, GsOut).
+translate_args_by_type(As, Ts, GsOut, AVs) :- translate_args_by_type(As, Ts, false, GsOut, AVs).
+translate_args_by_type([], _, _, [], []) :- !.
+translate_args_by_type([A|As], [T|Ts], Live, GsOut, [AV|AVs]) :-
+    ( expression_typed(T) -> expression_arg_value(A, AV), GsA = [], AEdited = false
+                           ; counting(translate_expr(A, GsA0, AV0), AEdited),
+                             maybe_stretch(Live, A, GsA0, AV0, GsA, AV) ),
+    either_true(Live, AEdited, Live1),
+    translate_args_by_type(As, Ts, Live1, GsRest, AVs),
+    append(GsA, GsRest, GsOut).
 
 %Handle data list:
 eval_data_term(X, [], X) :- (var(X); atomic(X)), !.
@@ -1868,18 +2106,20 @@ join_isolated_branch_candidates(Out, Val) :-
 
 %Translate case into a nested if-then-else, so case is first-match: Prior
 %carries the earlier branches' patterns for union narrowing (narrowing_sound/4).
-translate_case(Pairs, Kv, Expectation, Out, Goal, KGo) :-
-        translate_case(Pairs, Kv, Expectation, Out, Goal, KGo, []).
+translate_case(Pairs, KE, Kv, Expectation, Out, Goal, KGo) :-
+        translate_case(Pairs, KE, Kv, Expectation, Out, Goal, KGo, []).
 
-translate_case([[K,VExpr]|Rs], Kv, Expectation, Out, Goal, KGo, Prior) :-
+translate_case([[K,VExpr]|Rs], KE, Kv, Expectation, Out, Goal, KGo, Prior) :-
                                                       ( case_scrutinee_value_type(Kv, KT)
                                                         -> bind_pattern_typed(K, KT, Prior)
                                                          ; ctor_pattern_field_types(K) ),
-                                                      translate_expr_to_conj(VExpr, Expectation, ConV, VOut),
+                                                      counting(translate_expr(VExpr, Expectation, GV, VOut0), VE),
+                                                      either_true(KE, VE, Live),
+                                                      maybe_stretch_conj(Live, VExpr, GV, VOut0, ConV, VOut),
                                                       constrain_args(K, Kc, Gc),
                                                       build_branch(ConV, VOut, Out, Then),
                                                       ( Rs == [] -> Goal = ((Kv = Kc) -> Then), KGi=[]
-                                                                  ; translate_case(Rs, Kv, Expectation, Out, Next, KGi, [K|Prior]),
+                                                                  ; translate_case(Rs, KE, Kv, Expectation, Out, Next, KGi, [K|Prior]),
                                                                     Goal = ((Kv = Kc) -> Then ; Next) ),
                                                       append([Gc,KGi], KGo).
 
@@ -1896,6 +2136,13 @@ translate_args([], [], []).
 translate_args([X|Xs], Goals, [V|Vs]) :- translate_expr(X, G1, V),
                                          translate_args(Xs, G2, Vs),
                                          append(G1, G2, Goals).
+
+translate_progn([X], Expectation, Goals, Out) :- !, translate_expr(X, Expectation, Goals, Out).
+translate_progn([X|Xs], Expectation, Goals, Out) :- counting(translate_expr(X, G1, _), XEdits),
+                                                    counting(translate_progn(Xs, Expectation, G20, Out0), RestEdits),
+                                                    either_true(XEdits, RestEdits, Live),
+                                                    maybe_stretch(Live, [progn|Xs], G20, Out0, G2, Out),
+                                                    append(G1, G2, Goals).
 
 %foldall's result is the accumulator function's uniquely declared or inferred
 %output type, trusted only when the initial value (returned for an empty
@@ -1924,10 +2171,14 @@ disj_list([G], G) :- !.
 disj_list([G|Gs], (G ; R)) :- disj_list(Gs, R).
 
 %Build one disjunct per branch: (Conj, Out = Val):
-build_superpose_branches([], _, []).
-build_superpose_branches([E|Es], Out, [B|Bs]) :- translate_expr_to_conj(E, Conj, Val),
-                                                 build_branch(Conj, Val, Out, B),
-                                                 build_superpose_branches(Es, Out, Bs).
+build_superpose_branches(Es, Out, Bs) :- build_superpose_branches(Es, false, Out, Bs).
+build_superpose_branches([], _, _, []).
+build_superpose_branches([E|Es], PriorEdited, Out, [B|Bs]) :-
+    counting(translate_expr(E, Gs, Val), EEdits),
+    maybe_stretch_conj(PriorEdited, E, Gs, Val, Conj, V),
+    build_branch(Conj, V, Out, B),
+    either_true(PriorEdited, EEdits, NextEdited),
+    build_superpose_branches(Es, NextEdited, Out, Bs).
 
 %Build hyperpose branch as a goal list for concurrent_maplist to consume:
 build_hyperpose_branches([], []).

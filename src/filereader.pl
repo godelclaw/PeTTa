@@ -150,7 +150,7 @@ process_form(Space, _, parsed(expression, FormStr, Line, Term), []) :-
                                                                                     format("\e[33m--> metta sexpr -->~n\e[36m~w~n", [STerm]),
                                                                                     format("\e[33m^^^^^^^^^^^^^^^^^^^~n\e[0m") ).
 process_form(_, _, parsed(runnable, FormStr, Line, Term), Result) :- with_form_location(Line, FormStr,
-                                                                                     translate_expr([collapse, Term], Goals, Result)),
+                                                                                     translate_transient([collapse, Term], Goals, Result)),
                                                                   ( silent(true) -> true ; format("\e[33m--> metta runnable  -->~n\e[36m!~w~n\e[33m-->  prolog goal  -->\e[35m ~n", [FormStr]),
                                                                                            forall(member(G, Goals), portray_clause((:- G))),
                                                                                            format("\e[33m^^^^^^^^^^^^^^^^^^^^^^^~n\e[0m") ),

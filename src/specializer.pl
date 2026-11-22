@@ -50,13 +50,15 @@ specialize_call(HV, AVs, Out, Goal) :- %1. Retrieve a copy of all meta-clauses s
                                        ( ho_specialization(HV, SpecName)
                                          ; ( %4.1. Otherwise register the specialization:
                                              ( fun(SpecName) -> true ; assertz(fun(SpecName)) ),
+                                             ( edits_world(HV) -> ( may_edit(SpecName) -> true ; assertz(may_edit(SpecName)) ) ; true ),
                                              assertz(ho_specialization(HV, SpecName)),
                                              assertz(arity(SpecName, Arity)),
                                              ( %4.2. Re-use the type definition of the parent function for the specialization:
                                                findall(TypeChain, catch(match('&self', [':', HV, TypeChain], TypeChain, TypeChain), _, fail), TypeChains),
                                                forall(member(TypeChain, TypeChains), add_sexp('&self', [':', SpecName, TypeChain])),
                                                %4.3 Translate specialized MeTTa clauseses to Prolog, keeping track of the function we are compiling through recursion:
-                                               maplist({HV,SpecName}/[Meta,clause_info(Input,Clause,Dependencies,Uses)]>>
+                                               ( MetaList = [_|[_|_]] -> SpecPos = later ; SpecPos = first ),
+                                               maplist({HV,SpecName,SpecPos}/[Meta,clause_info(Input,Clause,Dependencies,Uses)]>>
                                                        ( Meta = fun_meta(ArgsNorm, RawBody, _),
                                                          %Preserve the original source head's result mode
                                                          %before replacing it with specialized value slots:
@@ -64,7 +66,7 @@ specialize_call(HV, AVs, Out, Goal) :- %1. Retrieve a copy of all meta-clauses s
                                                          effective_clause_body(HV, SourceArgs, RawBody, BodyExpr),
                                                          Input = [=,[SpecName|ArgsNorm],BodyExpr],
                                                          %a typecheck error in the specialized instance just means: don't specialize
-                                                         catch(compile_equation(Input,Clause,false,Dependencies,Uses), error(_, typecheck), fail) ), MetaList, ClauseInfos),
+                                                         catch(compile_equation(Input,Clause,false,SpecPos,Dependencies,Uses), error(_, typecheck), fail) ), MetaList, ClauseInfos),
                                                %4.4 Only proceeed specializing if this or any recursive call profited from specialization with the specialized function at head position:
                                                nb_getval(specneeded, true),
                                                %A cached specialization must keep the caller's interface.
@@ -75,6 +77,7 @@ specialize_call(HV, AVs, Out, Goal) :- %1. Retrieve a copy of all meta-clauses s
                                                ( asserta(Clause, Ref),
                                                  assertz(equation_arity(SpecName, Arity, Ref)),
                                                  record_translation(asserta, Ref, Input, Uses),
+                                                 ( memberchk(token(Token), Uses) -> assertz(live_unit(Token)), assertz(clause_unit(Ref, Token)) ; true ),
                                                  Input = [=, [_|SpecArgs], _],
                                                  length(SpecArgs, SpecN),
                                                  record_compiled_dependencies(Ref, SpecName/SpecN, Dependencies),
@@ -144,6 +147,7 @@ forget_symbol(Name) :- retractall('&self'(=, [Name|_], _)),
                        retractall(arity(Name,_)),
                        retractall(fun(Name)),
                        remember_function_metas(Name), catch(nb_delete(Name), _, true),
+                       retractall(may_edit(Name)),
                        retractall(ho_specialization(Name,_)).
 
 %Invalidate all specializations:

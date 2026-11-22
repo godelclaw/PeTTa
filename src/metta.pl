@@ -326,7 +326,7 @@ py_bool_norm(R, R).
 'get-state'(Var, Value) :- nb_getval(Var, Value).
 
 %%% Eval: %%%
-eval(C, Out) :- translate_expr(C, Goals, Out),
+eval(C, Out) :- translate_transient(C, Goals, Out),
                 call_goals(Goals).
 
 call_goals([]).
@@ -356,7 +356,8 @@ import_prolog_function(N, true) :-
           ( WasCallable == false
             -> notify_mutation(callable_changed(N))
           ; true ),
-          refresh_users(N, []) ))).
+          refresh_users(N, []),
+          bump_interface ))).
 'Predicate'([F|Args], Term) :- Term =.. [F|Args].
 callPredicate(G, true) :- call(G).
 assertzPredicate(G, true) :- assertz(G).
@@ -455,16 +456,22 @@ importer_helper(Space, File) :-
     import_once(Space, CanonPath, load_metta_file_cached(CanonPath, _, Space)).
 
 :- dynamic translator_rule/1.
-'add-translator-rule!'(HV, true) :- ( translator_rule(HV)
-                                      -> true ; assertz(translator_rule(HV)) ).
+'add-translator-rule!'(HV, true) :-
+    with_mutex(petta_definitions, with_definition_update((
+        ( translator_rule(HV) -> true
+        ; assertz(translator_rule(HV)), refresh_users(HV, []), bump_interface ) ))).
 
-'remove-translator-rule!'(HV, true) :- retractall(translator_rule(HV)).
+'remove-translator-rule!'(HV, true) :-
+    with_mutex(petta_definitions, with_definition_update((
+        ( translator_rule(HV)
+          -> retractall(translator_rule(HV)), refresh_users(HV, []), bump_interface
+           ; true ) ))).
 
 %%% Registration: %%%
 :- dynamic fun/1, arity/2.
 %Arities are registered in ascending order: the order current_predicate/1
 %enumerates them in depends on how many atoms the process created before.
-register_fun(N) :- ( fun(N) -> Existing = true ; Existing = false, assertz(fun(N)) ),
+register_fun(N) :- ( fun(N) -> Existing = true ; Existing = false, assertz(fun(N)), bump_interface ),
                    findall(Arity, native_predicate_arity(N, Arity), Arities0),
                    sort(Arities0, Arities),
                    ( (Existing == false ; Arities \= []), \+ native_function(N)
