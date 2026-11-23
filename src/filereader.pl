@@ -67,10 +67,9 @@ process_metta_string(S, Results, Space, Mode) :- string_codes(S, Cs),
 % Parse the whole file before registering any of its signatures. A space-only
 % import stores rows without changing the compiled program.
 parse_form(form(S), parsed(T, S, Term)) :- sread(S, Term),
-                                           ( Term = [=, [F|_], B], atom(F) -> note_late_definitions(B), T=function
+                                           ( Term = [=, [F|_], _], atom(F) -> T=function
                                                                             ; T=expression ).
-parse_form(runnable(S), parsed(runnable, S, Term)) :- sread(S, Term),
-                                                      note_late_definitions(Term).
+parse_form(runnable(S), parsed(runnable, S, Term)) :- sread(S, Term).
 
 %Second pass to compile / run / add the Terms:
 process_form(Space, _, parsed(expression, _, Term), []) :- 'add-atom'(Space, Term, true),
