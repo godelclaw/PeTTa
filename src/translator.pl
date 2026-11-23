@@ -387,7 +387,7 @@ call_memo_mode(F, N, Memo) :-
       -> Memo = direct
     ; Memo = memo ).
 
-translation_key(F, data, Key) :- ( fun(F) -> Key = function ; Key = data ).
+translation_key(F, data, Key) :- ( translator_rule(F) -> Key = translator_rule ; fun(F) -> Key = function ; Key = data ).
 translation_key(F, pattern, Key) :-
     ( fun(F) -> findall(A, callable_arity(F, A), As), sort(As, Key) ; Key = data ).
 translation_key(F, call(N), Key) :-
@@ -936,7 +936,7 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
         safe_rewrite_streamops([H0|T0],[H|T]),
         translate_expr(H, none, GsH, HV),
         %--- Translator rules ---:
-        ( nonvar(HV), translator_rule(HV) -> length(T, NHook),
+        ( nonvar(HV), translator_rule(HV) -> note_translation_use(HV, data), length(T, NHook),
                                              ( once(fn_decl_arity(HV, NHook, ArgTypes, _))
                                                -> translate_args_by_type(T, ArgTypes, GsT, T1)
                                                 ; translate_args(T, GsT, T1) ),

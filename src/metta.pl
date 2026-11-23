@@ -455,10 +455,15 @@ importer_helper(Space, File) :-
     import_once(Space, CanonPath, load_metta_file_cached(CanonPath, _, Space)).
 
 :- dynamic translator_rule/1.
+%A rule rewrites applications when they are translated, so code translated with or
+%without it is translated again:
 'add-translator-rule!'(HV, true) :- ( translator_rule(HV)
-                                      -> true ; assertz(translator_rule(HV)) ).
+                                      -> true
+                                       ; with_mutex(petta_definitions, with_definition_update(
+                                           ( assertz(translator_rule(HV)), refresh_users(HV, []) ))) ).
 
-'remove-translator-rule!'(HV, true) :- retractall(translator_rule(HV)).
+'remove-translator-rule!'(HV, true) :- with_mutex(petta_definitions, with_definition_update(
+                                           ( retractall(translator_rule(HV)), refresh_users(HV, []) ))).
 
 %%% Registration: %%%
 :- dynamic fun/1, arity/2.

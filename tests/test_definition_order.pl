@@ -611,4 +611,25 @@ test(higher_order_entrypoints_follow_source_arity_retirement) :-
         user:'remove-atom'('&self',Term,_),
         findall(R,apply_entry(N,F,Values,R),Gone),assertion(Gone==[[F|Values]]) )).
 
+test(an_added_declaration_reaches_a_caller_compiled_before_it) :-
+    program("(= (do_decl_shape $x) (shape $x))
+             (= (do_decl_caller) (do_decl_shape (+ 1 2)))
+             !(do_decl_caller)
+             !(add-atom &self (: do_decl_shape (-> Atom %Undefined%)))
+             !(do_decl_caller)
+             !(remove-atom &self (: do_decl_shape (-> Atom %Undefined%)))
+             !(do_decl_caller)",Results),
+    assertion(Results==[[shape,3],true,[shape,[+,1,2]],true,[shape,3]]).
+
+
+test(an_added_translator_rule_reaches_a_caller_compiled_before_it) :-
+    program("(= (do_rule_expand $x) (quote (+ $x 1)))
+             (= (do_rule_caller) (do_rule_expand 7))
+             !(do_rule_caller)
+             !(add-translator-rule! do_rule_expand)
+             !(do_rule_caller)
+             !(remove-translator-rule! do_rule_expand)
+             !(do_rule_caller)",Results),
+    assertion(Results==[[+,7,1],true,8,true,[+,7,1]]).
+
 :- end_tests(definition_order).
