@@ -32,7 +32,7 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
                                  maybe_print_compiled_clause("added function", Term, Clause).
 
 %Add a declaration: the code translated with the name's declarations is translated again:
-'add-atom'(Space, Term, true) :- Space == '&self', Term = [Colon, F, _], Colon == (:), atom(F), !,
+'add-atom'(Space, Term, true) :- Space == '&self', declaration_name(Term, F), !,
                                  with_mutex(petta_definitions, transaction((
                                  add_sexp(Space, Term), refresh_users(F, []) ))).
 
@@ -50,12 +50,17 @@ remove_sexp(Space, Atom, Removed) :- ( var(Atom) -> instantiation_error(Atom)
                                        ( Refs = [] -> true ; removed_equations(F, Refs) ) ))).
 
 %Remove a declaration:
-'remove-atom'(Space, Term, Removed) :- Space == '&self', Term = [Colon, F, _], Colon == (:), atom(F), !,
+'remove-atom'(Space, Term, Removed) :- Space == '&self', declaration_name(Term, F), !,
                                        with_mutex(petta_definitions, transaction((
                                        remove_sexp(Space, Term, Removed), refresh_users(F, []) ))).
 
 %Remove all same atoms:
 'remove-atom'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).
+
+%Check the list spine before matching the three declaration fields.
+declaration_name(Term, Name) :-
+    nonvar(Term), Term = [Colon|_], Colon == (:),
+    is_list(Term), Term = [_, Name, _], atom(Name).
 
 % A space is a predicate per row arity, created by the first add-atom. Reading
 % a space before it is written calls an undefined predicate, and every such

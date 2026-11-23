@@ -27,7 +27,8 @@ translate_clause(Input, (Head :- BodyConj), ConstrainArgs) :-
                                                                   flatten(GoalsA,GoalsPrefix)
                                                                 ; Args1 = Args0, GoalsPrefix = [] ),
                                                length(Args0, SourceArity),
-                                               ( declared_output_type(F, SourceArity, 'Atom')
+                                               read_body_mode(F, SourceArity, BodyMode),
+                                               ( BodyMode == held
                                                  -> GoalsBody = [],
                                                     ExpOut = BodyExpr
                                                   ; translate_expr(BodyExpr, GoalsBody, ExpOut) ),
@@ -70,10 +71,23 @@ compile_equation(Term, Clause, Uses) :-
         ; nb_linkval(petta_translation_uses, Previous) )).
 
 note_translation_use(F, Use) :-
-    ( atom(F), nb_current(petta_translation_uses, Box), Box = uses(Old)
-      -> translation_key(F, Use, Key), nb_setarg(1, Box, [use(F, Use, Key)|Old])
+    ( atom(F), nb_current(petta_translation_uses, Box), Box = uses(_)
+      -> translation_key(F, Use, Key), record_translation_use(Box, F, Use, Key)
     ; true ).
 
+%The function's own output declaration decides whether to evaluate its body.
+read_body_mode(F, N, Mode) :-
+    translation_key(F, body(N), Mode),
+    ( nb_current(petta_translation_uses, Box), Box = uses(_)
+      -> record_translation_use(Box, F, body(N), Mode)
+    ; true ).
+
+record_translation_use(Box, F, Use, Key) :-
+    arg(1, Box, Old),
+    nb_setarg(1, Box, [use(F, Use, Key)|Old]).
+
+translation_key(F, body(N), Mode) :-
+    ( declared_output_type(F, N, 'Atom') -> Mode = held ; Mode = evaluated ).
 translation_key(F, data, Key) :- ( translator_rule(F) -> Key = translator_rule ; fun(F) -> Key = function ; Key = data ).
 translation_key(F, pattern, Key) :-
     ( fun(F) -> findall(A, arity(F, A), As), sort(As, Key) ; Key = data ).

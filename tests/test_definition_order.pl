@@ -455,6 +455,27 @@ test(an_added_declaration_reaches_a_caller_compiled_before_it) :-
              !(do_decl_caller)",Results),
     assertion(Results==[[shape,3],true,[shape,[+,1,2]],true,[shape,3]]).
 
+test(an_atom_output_edit_refreshes_new_calls_and_keeps_an_entered_call) :-
+    program("(= (do_decl_body $x) (+ $x 1))
+             (= (do_decl_body $x) (* $x 2))
+             !(collapse (let $result (do_decl_body 2)
+                 (let $_ (add-atom &self (: do_decl_body (-> Number Atom))) $result)))
+             !(collapse (do_decl_body 2))
+             !(remove-atom &self (: do_decl_body (-> Number Atom)))
+             !(collapse (do_decl_body 2))", Results),
+    assertion(Results == [[3,4], [[+,2,1],[*,2,2]], true, [3,4]]).
+
+test(open_declaration_edits_leave_the_tail_and_space_alone) :-
+    program("(: do_decl_existing (-> Number Number))
+             !(let $row (cons : (cons do_decl_open $tail))
+                 (let $result (catch (add-atom &self $row)) (pair $result (is-var $tail))))
+             !(let $row (cons : (cons do_decl_existing $tail))
+                 (let $result (catch (remove-atom &self $row)) (pair $result (is-var $tail))))
+             !(collapse (match &self (: do_decl_open $t) $t))
+             !(collapse (match &self (: do_decl_existing $t) $t))", Results),
+    assertion(Results = [[pair, ['Error', instantiation_error, _], true],
+                         [pair, ['Error', instantiation_error, _], true],
+                         [], [[->, 'Number', 'Number']]]).
 
 test(an_added_translator_rule_reaches_a_caller_compiled_before_it) :-
     program("(= (do_rule_expand $x) (quote (+ $x 1)))
