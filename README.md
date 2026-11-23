@@ -27,8 +27,8 @@ register function names and arities before a file's forms run.
   backtracking.
 - A call keeps its remaining clause alternatives when backtracking resumes
   it. A new call uses the compiled clauses available at its own entry.
-  Named definition and declaration edits can refresh stored clauses when
-  they change a recorded translation decision.
+  Named definition, declaration and translator-rule edits can refresh
+  stored clauses when they change a recorded translation decision.
 - `eval` translates its operand when it runs. `call` invokes a predicate,
   and `reduce` dispatches on run-time values. For written-out `call` and
   `reduce` operands, nested arguments are translated in the surrounding unit.
