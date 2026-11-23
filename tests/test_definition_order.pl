@@ -299,11 +299,11 @@ test(removing_a_callee_inside_an_active_caller_uses_the_empty_equation_fallback)
                 (let $ignored (remove-atom &self (= (do_luv_removed $x) (+ $x 1))) (do_luv_removed 5)))
              !(do_luv_remove_and_use)",Results),assertion(Results==[[do_luv_removed,5]]).
 
-test(a_name_added_earlier_in_a_running_body_is_called_when_reached) :-
+test(a_new_name_remains_data_in_the_already_entered_translation) :-
     program("(= (do_luv_define_and_use $x)
                 (let $ignored (add-atom &self (= (do_luv_new $v) (+ $v 1))) (do_luv_new $x)))
              !(do_luv_define_and_use 1) !(do_luv_new 1)",Results),
-    assertion(Results==[2,2]).
+    assertion(Results==[[do_luv_new,1],2]).
 
 test(an_entered_nondeterministic_equation_keeps_its_remaining_answers) :-
     program("(= (do_luv_choice) (superpose (1 2)))",_),

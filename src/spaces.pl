@@ -50,8 +50,7 @@ retract_reporting(Term, Removed) :-
 'add-atom'(_, Term, _) :- var(Term), !, instantiation_error(Term).
 
 %Publish a function and all refreshed dependents together, or roll back.
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],Body], atom(FAtom), !,
-    note_late_definitions(Body),
+'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
     with_mutex(petta_definitions,
         with_definition_update(runtime_add_function_tx(Space, Term, FAtom, W))).
 
