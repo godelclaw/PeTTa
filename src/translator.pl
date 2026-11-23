@@ -74,11 +74,12 @@ note_translation_use(F, Use) :-
       -> translation_key(F, Use, Key), nb_setarg(1, Box, [use(F, Use, Key)|Old])
     ; true ).
 
-translation_key(F, data, Key) :- ( fun(F) -> Key = function ; Key = data ).
+translation_key(F, data, Key) :- ( translator_rule(F) -> Key = translator_rule ; fun(F) -> Key = function ; Key = data ).
 translation_key(F, pattern, Key) :-
     ( fun(F) -> findall(A, arity(F, A), As), sort(As, Key) ; Key = data ).
 translation_key(F, call(N), Key) :-
-    ( \+ fun(F) -> Key = data
+    ( translator_rule(F) -> Key = translator_rule
+    ; \+ fun(F) -> Key = data
     ; A is N + 1,
       findall(T, catch(match('&self', [':', F, T], T, T), _, fail), Ts), sort(Ts, Types),
       ( arity(F, A)
@@ -299,7 +300,8 @@ translate_expr([H0|T0], Goals, Out, Evidence) :-
         safe_rewrite_streamops([H0|T0],[H|T]),
         translate_expr(H, GsH, HV, HeadEvidence),
         %--- Translator rules ---:
-        ( nonvar(HV), translator_rule(HV) -> ( catch(match('&self', [':', HV, TypeChain], TypeChain, TypeChain), _, fail)
+        ( nonvar(HV), translator_rule(HV) -> note_translation_use(HV, data),
+                                             ( catch(match('&self', [':', HV, TypeChain], TypeChain, TypeChain), _, fail)
                                                -> TypeChain = [->|Xs],
                                                   append(ArgTypes, [_], Xs),
                                                   translate_args_by_type(T, ArgTypes, GsT, T1)
