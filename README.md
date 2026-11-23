@@ -22,30 +22,31 @@ given, followed by any flags:
 
 `sh run.sh ./examples/a.metta ./examples/b.metta --strict`
 
-Load order is semantically significant — a declaration or a constructor that
-arrives in a later file cannot retroactively inform code already compiled from
-an earlier one.
+File order determines what each load sees from earlier files. The type
+checker also reads a file's declarations before its forms run.
 
 ### Staging
 
-A file is processed form by form. Code is translated once, against the
-program as it stands at that point:
+A `!` query is translated when the loader reaches it. The loader can
+register function names and arities before a file's forms run.
 
-- A `!` query is translated when it is reached, after the forms before it
-  took effect.
-- A function runs as translated against the program as it stands when it
-  is called. When an equation, a declaration or a translator rule changes,
-  the code translated with the old one is translated again.
-- In translated code, an application of a function is a call and any other
-  application is data. This holds for that code even if a function with
-  the name is added while it runs.
-- `eval`, `call` and `reduce` decide when they are reached.
-- Backtracking resumes a call as it was entered.
+- Translation chooses the dispatch for a plain application with a literal
+  head. That choice stays with the running code across edits and
+  backtracking.
+- A call keeps its remaining clause alternatives when backtracking resumes
+  it. A new call uses the compiled clauses available at its own entry.
+  Named definition and declaration edits can refresh stored clauses when
+  they change a recorded translation decision.
+- `(eval (f))` translates `(f)` when it runs. A literal
+  `(eval (quote E))` translates `E` in the surrounding unit. `call` invokes
+  a predicate, and `reduce` dispatches on run-time values. For written-out
+  `call` and `reduce` operands, nested arguments are translated in the
+  surrounding unit.
 
-So within one query, a function added with `add-atom` is used by `eval`,
-`call` and `reduce`, by calls of other functions, and by later queries,
-while a plain application written in that query stays data. The
-[runnable example](examples/callquoteevalreduce.metta) shows each case.
+If plain `(f)` was translated as data, it stays data in that unit after
+`add-atom` defines `f`. Use `(eval (f))` to translate that occurrence
+after the definition is installed. See the
+[runnable example](examples/callquoteevalreduce.metta).
 
 ### List shape and term text
 
