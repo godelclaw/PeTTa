@@ -26,6 +26,27 @@ Load order is semantically significant — a declaration or a constructor that
 arrives in a later file cannot retroactively inform code already compiled from
 an earlier one.
 
+### Staging
+
+A file is processed form by form. Code is translated once, against the
+program as it stands at that point:
+
+- A `!` query is translated when it is reached, after the forms before it
+  took effect.
+- A function runs as translated against the program as it stands when it
+  is called. When an equation, a declaration or a translator rule changes,
+  the code translated with the old one is translated again.
+- In translated code, an application of a function is a call and any other
+  application is data. This holds for that code even if a function with
+  the name is added while it runs.
+- `eval`, `call` and `reduce` decide when they are reached.
+- Backtracking resumes a call as it was entered.
+
+So within one query, a function added with `add-atom` is used by `eval`,
+`call` and `reduce`, by calls of other functions, and by later queries,
+while a plain application written in that query stays data. The
+[runnable example](examples/callquoteevalreduce.metta) shows each case.
+
 ### List shape and term text
 
 `get-metatype` reports `Expression` for a finite outer list ending in `()`.
