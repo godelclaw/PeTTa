@@ -487,4 +487,240 @@ test(an_added_translator_rule_reaches_a_caller_compiled_before_it) :-
              !(do_rule_caller)",Results),
     assertion(Results==[[+,7,1],true,8,true,[+,7,1]]).
 
+%Only a row (: F Type) with the colon and the symbol F declares F. A row with a
+%variable in either place is data, and stored and fresh translations agree.
+test(rows_with_a_variable_head_or_name_are_not_declarations) :-
+    program("(= (do_vtag_id $x) $x)
+             (= (do_vtag_caller) (do_vtag_id (+ 1 2)))
+             !(add-atom &self ($tag do_vtag_id (-> Atom Atom)))
+             !(add-atom &self (: $any (-> Atom Atom)))
+             !(do_vtag_caller)
+             !(eval (do_vtag_id (+ 1 2)))
+             !(remove-atom &self (other_tag do_vtag_id (-> Atom Atom)))
+             !(do_vtag_caller)", Results),
+    assertion(Results == [true, true, 3, 3, true, 3]).
+
+test(pattern_declaration_removal_refreshes_matched_callers) :-
+    program("(: do_patrm_id (-> Atom Atom))
+             (= (do_patrm_id $x) $x)
+             (= (do_patrm_caller) (do_patrm_id (+ 1 2)))
+             !(do_patrm_caller)
+             !(remove-atom &self (: $f (-> Atom Atom)))
+             !(do_patrm_caller)", Results),
+    assertion(Results == [[+, 1, 2], true, 3]).
+
+test(generic_three_variable_removal_does_not_strip_equations) :-
+    program("(= (do_genrm_fn $x) (+ $x 1))
+             !(let $r (catch (remove-atom &self ($a $b $c)))
+                 (pair $r (and (is-var $a) (is-var $b))))
+             !(do_genrm_fn 4)", Results),
+    assertion(Results = [[pair, ['Error', instantiation_error, _], true], 5]).
+
+test(active_translator_rule_declaration_and_equation_edits_refresh_callers) :-
+    program("(= (do_rdecl_r $x) (quote (quote $x)))
+             !(add-translator-rule! do_rdecl_r)
+             (= (do_rdecl_c) (do_rdecl_r (+ 1 2)))
+             !(do_rdecl_c)
+             !(add-atom &self (: do_rdecl_r (-> Atom %Undefined%)))
+             !(do_rdecl_c)
+             !(remove-atom &self (: do_rdecl_r (-> Atom %Undefined%)))
+             !(do_rdecl_c)
+             !(add-atom &self (= (do_rdecl_r $x) (quote (+ $x 100))))
+             !(remove-atom &self (= (do_rdecl_r $x) (quote (quote $x))))
+             !(do_rdecl_c)", Results),
+    assertion(Results == [true, 3, true, [+, 1, 2], true, 3, true, true, 103]).
+
+test(removing_a_translator_rule_arity_falls_back_cleanly_without_looping) :-
+    program("(= (do_rdrop $x) (quote (+ $x 1)))
+             (= (do_rdrop $x $y) (quote (+ $x $y)))
+             !(add-translator-rule! do_rdrop)
+             (= (do_rdrop_c1) (do_rdrop 7))
+             (= (do_rdrop_c2) (do_rdrop 3 4))
+             !(do_rdrop_c1)
+             !(do_rdrop_c2)
+             !(remove-atom &self (= (do_rdrop $x) (quote (+ $x 1))))
+             !((do_rdrop_c1) 5)
+             !(do_rdrop_c2)
+             !(remove-atom &self (= (do_rdrop $x $y) (quote (+ $x $y))))
+             !(do_rdrop_c1)
+             !(do_rdrop 7)
+             !(add-atom &self (= (do_rdrop $x) (quote (+ $x 10))))
+             !(do_rdrop_c1)", Results),
+    assertion(Results == [true, 8, 7, true, [+, 7, 5], 7, true, [do_rdrop, 7], [do_rdrop, 7], true, 17]).
+
+test(translator_rule_api_requires_atom_and_preserves_existing_rules) :-
+    program("(= (do_rval $x) (quote (+ $x 1)))
+             !(add-translator-rule! do_rval)
+             !(let $r (catch (add-translator-rule! $x)) (pair $r (is-var $x)))
+             !(let $r (catch (remove-translator-rule! $y)) (pair $r (is-var $y)))
+             !(catch (add-translator-rule! 123))
+             !(catch (remove-translator-rule! 123))
+             !(do_rval 7)", Results),
+    assertion(Results = [true,
+                         [pair, ['Error', instantiation_error, _], true],
+                         [pair, ['Error', instantiation_error, _], true],
+                         ['Error', type_error(atom, 123), _],
+                         ['Error', type_error(atom, 123), _],
+                         8]).
+
+test(held_atom_argument_does_not_run_translator_rule_at_compile_time) :-
+    program("!(bind! do_held_ticks (new-state 0))
+             (: do_held_fn (-> Atom %Undefined%))
+             (= (do_held_fn $x) $x)
+             (= (do_held_rule $x)
+                (let $_ (change-state! do_held_ticks (+ (get-state do_held_ticks) 1)) (quote $x)))
+             !(add-translator-rule! do_held_rule)
+             (= (do_held_caller) (do_held_fn (do_held_rule 42)))
+             !(get-state do_held_ticks)
+             !(do_held_caller)", Results),
+    assertion(Results == [true, true, 0, [do_held_rule, 42]]).
+
+test(eta_expanded_caller_uses_late_memoize_dispatch) :-
+    program("!(import! &self (library lib_memo))
+             !(bind! do_ememo_ticks (new-state 0))
+             (= (do_ememo_slow $x $y)
+                (let $_ (change-state! do_ememo_ticks (+ (get-state do_ememo_ticks) 1)) (+ $x $y)))
+             (= (do_ememo_wrap $x) (do_ememo_slow $x))
+             !(memoize do_ememo_slow)
+             !(do_ememo_wrap 3 4)
+             !(do_ememo_wrap 3 4)
+             !(get-state do_ememo_ticks)", Results),
+    assertion(append(_, [7, 7, 1], Results)).
+
+test(declaration_variable_sharing_change_refreshes_callers) :-
+    program("(: do_vshare (-> $a $a %Undefined%))
+             (= (do_vshare $x $y) (ok $x $y))
+             (= (do_vshare_caller) (do_vshare 1 \"hi\"))
+             !(collapse (do_vshare_caller))
+             !(remove-atom &self (: do_vshare (-> $a $a %Undefined%)))
+             !(add-atom &self (: do_vshare (-> $a $b %Undefined%)))
+             !(collapse (do_vshare_caller))", Results),
+    assertion(Results == [[], true, true, [[ok, 1, "hi"]]]).
+
+test(translator_rule_samples_space_data_at_expansion_and_refreshes_on_program_edit) :-
+    program("(do_rdata_flag old)
+             (= (do_rdata_rule) (quote (match &self (do_rdata_flag $v) $v)))
+             (= (do_rdata_macro) (let $v (match &self (do_rdata_flag $x) $x) (quote $v)))
+             !(add-translator-rule! do_rdata_macro)
+             (= (do_rdata_caller) (do_rdata_macro))
+             !(do_rdata_caller)
+             !(remove-atom &self (do_rdata_flag old))
+             !(add-atom &self (do_rdata_flag new))
+             !(do_rdata_caller)
+             !(add-atom &self (= (do_rdata_bump) 1))
+             !(do_rdata_caller)", Results),
+    assertion(Results == [true, old, true, true, old, true, new]).
+
+test(transaction_rollback_restores_program_generation_and_keeps_reads_valid) :-
+    program("(= (do_txgen_r $x) (quote (+ $x 1)))
+             !(add-translator-rule! do_txgen_r)
+             (= (do_txgen_c) (do_txgen_r 5))
+             !(do_txgen_c)
+             !(collapse (transaction (let $_ (add-atom &self (= (do_txgen_r $x) (quote (+ $x 99)))) (empty))))
+             !(do_txgen_c)", Results),
+    assertion(Results == [true, 6, [], 6]),
+    forall(user:translation_use(Owner, _, Key, Saved),
+           assertion(user:translation_use_valid(Owner, Key, Saved))).
+
+test(variable_tagged_equation_removal_refreshes_callers) :-
+    program("(= (do_veq_fn $x) (+ $x 1))
+             (= (do_veq_caller) (do_veq_fn 4))
+             (= (do_veq_scaller) (do_veq_sfn 4))
+             !(do_veq_caller)
+             !(let $r (remove-atom &self ($eq (do_veq_fn $x) $b)) (pair $r (is-var $eq)))
+             !(do_veq_caller)
+             !(let $s (new-space)
+                (let $_ (add-atom $s (= (do_veq_sfn $x) (+ $x 2)))
+                  (let $before (do_veq_scaller)
+                    (let $rm (remove-atom $s ($eq2 (do_veq_sfn $x) $b))
+                      (pair $before (pair $rm (do_veq_scaller)))))))", Results),
+    assertion(Results == [5, [pair, true, true], [do_veq_fn, 4], [pair, 6, [pair, true, [do_veq_sfn, 4]]]]).
+
+test(refreshed_stored_callers_match_fresh_translations_across_edit_kinds) :-
+    program("(= (do_eqv_target $x) (val $x))
+             (= (do_eqv_stored) (do_eqv_target (+ 1 2)))", _),
+    forall(member(Edit,
+                  [ "!(add-atom &self (: do_eqv_target (-> Atom Atom)))",
+                    "!(remove-atom &self (: do_eqv_target (-> Atom Atom)))",
+                    "!(add-atom &self ($tag do_eqv_target (-> Atom Atom)))",
+                    "!(remove-atom &self (other do_eqv_target (-> Atom Atom)))",
+                    "!(add-atom &self (: $any (-> Atom Atom)))",
+                    "!(remove-atom &self (: do_eqv_target (-> Atom Atom)))",
+                    "!(add-atom &self (= (do_eqv_target $x) (quote (+ $x 10))))",
+                    "!(remove-atom &self (= (do_eqv_target $x) (val $x)))",
+                    "!(add-translator-rule! do_eqv_target)",
+                    "!(add-atom &self (: do_eqv_target (-> Atom %Undefined%)))",
+                    "!(remove-atom &self (: do_eqv_target (-> Atom %Undefined%)))",
+                    "!(remove-atom &self (= (do_eqv_target $x) (quote (+ $x 10))))",
+                    "!(add-atom &self (= (do_eqv_target $x) (quote (+ $x 20))))",
+                    "!(remove-translator-rule! do_eqv_target)" ]),
+           ( program(Edit, _),
+             program("!(collapse (do_eqv_stored))", [StoredAns]),
+             program("!(collapse (do_eqv_target (+ 1 2)))", [FreshAns]),
+             assertion(StoredAns == FreshAns),
+             forall(user:translation_use(Owner, _, Key, Saved),
+                    assertion(user:translation_use_valid(Owner, Key, Saved))) )).
+
+
+test(open_tags_are_data_in_the_loader_and_in_add_atom) :-
+    program("($tag (do_open_tag_loaded) 7) !(do_open_tag_loaded)", Loaded),
+    assertion(Loaded == [[do_open_tag_loaded]]),
+    user:'add-atom'('&self', [Tag, [do_open_tag_added], 7], true),
+    assertion(var(Tag)),
+    assertion(\+ user:fun(do_open_tag_added)),
+    user:'add-atom'('&self', [=, [do_open_tag_added], 9], true),
+    user:'remove-atom'('&self', [RemoveTag, [do_open_tag_added], 9], true),
+    assertion(var(RemoveTag)),
+    program("!(do_open_tag_added)", Removed),
+    assertion(Removed == [[do_open_tag_added]]).
+
+test(a_rule_for_a_generated_head_refreshes_stored_code) :-
+    program("(= (do_generated_caller) (unique (superpose (a b a))))", _),
+    findall(X, user:do_generated_caller(X), Before),
+    assertion(Before == [a,b]),
+    setup_call_cleanup(
+        assertz(user:collapse(_, [quote,[rewritten]]), Ref),
+        setup_call_cleanup(
+            user:'add-translator-rule!'(collapse, true),
+            ( program("(= (do_generated_fresh) (unique (superpose (a b a))))", _),
+              findall(X, user:do_generated_caller(X), Stored),
+              findall(X, user:do_generated_fresh(X), Fresh),
+              assertion(Fresh \== []),
+              assertion(Fresh \== Before),
+              assertion(Stored == Fresh) ),
+            user:'remove-translator-rule!'(collapse, true)),
+        erase(Ref)).
+
+test(a_removal_that_finds_no_equation_keeps_the_function) :-
+    program("(= (do_no_match_kept) 10)", _),
+    user:'new-space'(Empty),
+    user:'remove-atom'(Empty, [=, [do_no_match_kept], 10], false),
+    program("!(do_no_match_kept)", Results),
+    assertion(Results == [10]).
+
+test(memoization_keeps_equations_in_their_source_space) :-
+    program("!(import! &self (library lib_memo))", _),
+    user:'new-space'(Source),
+    Equation = [=, [do_located_memo, X], X],
+    user:'add-atom'(Source, Equation, true),
+    program("!(memoize do_located_memo) !(do_located_memo 4)", Results),
+    assertion(Results == [true,4]),
+    assertion(user:match(Source, Equation, yes, yes)),
+    assertion(\+ user:match('&self', Equation, yes, yes)).
+
+test(a_value_declaration_leaves_a_rules_arguments_evaluated) :-
+    program("(: do_rule_value_decl Symbol)
+             (= (do_rule_value_decl $x) (quote (+ $x 1)))
+             !(add-translator-rule! do_rule_value_decl)
+             !(do_rule_value_decl 5)", Results),
+    assertion(Results == [true,6]).
+
+test(a_rule_uses_only_declarations_applicable_at_its_arity) :-
+    program("(: do_rule_two_arities (-> Atom Atom))
+             (= (do_rule_two_arities $x) (quote $x))
+             (= (do_rule_two_arities $x $y) (quote (+ $x $y)))
+             !(add-translator-rule! do_rule_two_arities)
+             !(do_rule_two_arities 3 4)", Results),
+    assertion(Results == [true,7]).
+
 :- end_tests(definition_order).

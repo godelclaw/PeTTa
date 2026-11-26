@@ -6,9 +6,10 @@ Please check out the [Wiki](https://github.com/patham9/PeTTa/wiki) for more info
 
 ### Dependencies
 
-- SWI-Prolog of [godelclaw/swipl-devel](https://github.com/godelclaw/swipl-devel), branch `main-fixed`:
-  conjunctive matches need its db_snapshot_scope/2, and loading PeTTa raises an error without it.
-  This version was tested with commit 34f4339.
+- SWI-Prolog 11.1.0 or later, built from the
+  [development sources](https://github.com/SWI-Prolog/swipl-devel): PeTTa relies on
+  transaction, snapshot and retract fixes merged there on 2026-11-19.
+  This version was tested with commit 79f1612.
 - Python 3.x (for janus Python interop)
 
 ### Usage
@@ -19,23 +20,31 @@ Example run:
 
 ### Staging
 
-A `!` query is translated when the loader reaches it. The loader can
-register function names and arities before a file's forms run.
+Code runs as it was translated, and every call is a fresh start:
 
-- Translation chooses the dispatch for a plain application with a literal
-  head. That choice stays with the running code across edits and
-  backtracking.
-- A call keeps its remaining clause alternatives when backtracking resumes
-  it. A new call uses the compiled clauses available at its own entry.
-  Named definition, declaration and translator-rule edits can refresh
-  stored clauses when they change a recorded translation decision.
+- A file's function names and arities are registered before its forms run.
+  A `!` query is translated when the loader reaches it.
+- A function call runs the function as translated against the program at
+  that call. The program is its equations `(= (f ...) ...)`, its
+  declarations `(: f type)` and its translator rules. An edit of any of
+  them translates again the stored code whose translation read what it
+  changed, and a translator rule's expansions are computed again after
+  every such edit. Other space rows, including rows with a variable in
+  place of `=` or `:` or of the name, are data: a translator rule reads
+  them when it runs, and editing them translates nothing again.
+- Code that is already running keeps its translation. A plain application
+  translated as data stays data in that unit after `add-atom` defines its
+  head, and backtracking resumes a call with the clause alternatives it
+  entered with.
 - `eval` translates its operand when it runs. `call` invokes a predicate,
   and `reduce` dispatches on run-time values. For written-out `call` and
   `reduce` operands, nested arguments are translated in the surrounding unit.
+- A match reads the space as it is at the call. Each pattern of a
+  conjunctive match is read when it is reached: a lookup that is already
+  running keeps the rows it started with, and a later one sees the space
+  as it is then.
 
-If plain `(f)` was translated as data, it stays data in that unit after
-`add-atom` defines `f`. Use `(eval (f))` to translate that occurrence
-after the definition is installed. See the
+Use `(eval (f))` to translate an occurrence after `f` is defined. See the
 [runnable example](examples/callquoteevalreduce.metta).
 
 ### List shape and term text

@@ -217,7 +217,7 @@ member_alpha(X, [_|T]) :- member_alpha(X, T).
                                                             ; 'intersection-atom'(T, B, Out) ).
 
 %%% Type system: %%%
-get_function_type([F|Args], T) :- nonvar(F), match('&self', [':',F,[->|Ts]], _, _),
+get_function_type([F|Args], T) :- nonvar(F), declared_row(F, [->|Ts]),
                                   append(As,[T0],Ts),
                                   checked_args(As, Args, As1, Args1),
                                   T = T0,
@@ -244,7 +244,7 @@ get_type_candidate(X, T) :- get_function_type(X,T).
 get_type_candidate(X, T) :- \+ get_function_type(X, _),
                             is_list(X),
                             maplist('get-type', X, T).
-get_type_candidate(X, T) :- match('&self', [':',X,T], T, _).
+get_type_candidate(X, T) :- declared_row(X, T).
 'get-metatype'(X, 'Variable') :- var(X), !.
 'get-metatype'(X, 'Grounded') :- number(X), !.
 'get-metatype'(X, 'Grounded') :- string(X), !.
@@ -341,7 +341,7 @@ call_goals([G|Gs]) :- call(G),
 %%% Prolog interop: %%%
 argv(K, Arg) :- current_prolog_flag(argv, Argv), nth0(K, Argv, A), ( atom_number(A, N) -> Arg = N ; Arg = A ).
 import_prolog_function(N, true) :- with_mutex(petta_definitions,
-                                     transaction((register_fun(N), refresh_users(N, [])))).
+                                     transaction((register_fun(N), program_changed([N])))).
 'Predicate'([F|Args], Term) :- Term =.. [F|Args].
 callPredicate(G, true) :- call(G).
 assertzPredicate(G, true) :- assertz(G).
@@ -428,13 +428,18 @@ importer_helper(Space, File) :-
 :- dynamic translator_rule/1.
 %A rule rewrites applications when they are translated, so code translated with or
 %without it is translated again:
-'add-translator-rule!'(HV, true) :- ( translator_rule(HV)
-                                      -> true
-                                       ; with_mutex(petta_definitions, transaction(
-                                           ( assertz(translator_rule(HV)), refresh_users(HV, []) ))) ).
+'add-translator-rule!'(HV, true) :- must_be(atom, HV),
+                                    with_mutex(petta_definitions, transaction(
+                                        ( translator_rule(HV)
+                                          -> true
+                                        ; assertz(translator_rule(HV)),
+                                          program_changed([HV]) ))).
 
-'remove-translator-rule!'(HV, true) :- with_mutex(petta_definitions, transaction(
-                                           ( retractall(translator_rule(HV)), refresh_users(HV, []) ))).
+'remove-translator-rule!'(HV, true) :- must_be(atom, HV),
+                                       with_mutex(petta_definitions, transaction(
+                                           ( retract(translator_rule(HV))
+                                             -> program_changed([HV])
+                                           ; true ))).
 
 %%% Registration: %%%
 :- dynamic fun/1, arity/2.
