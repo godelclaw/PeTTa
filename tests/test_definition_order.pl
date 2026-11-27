@@ -622,6 +622,30 @@ test(an_added_declaration_reaches_a_caller_compiled_before_it) :-
     assertion(Results==[[shape,3],true,[shape,[+,1,2]],true,[shape,3]]).
 
 
+test(a_rule_without_equations_leaves_applications_as_data) :-
+    program("(= (do_rule_seven) 7)
+             !(add-translator-rule! do_rule_seven)
+             (= (do_rule_use7) (do_rule_seven))
+             !(remove-atom &self (= (do_rule_seven) 7))
+             !(do_rule_use7)
+             !(do_rule_seven)", Results),
+    assertion(Results == [true, true, [do_rule_seven], [do_rule_seven]]).
+
+test(a_rule_head_must_be_a_symbol) :-
+    program("!(catch (add-translator-rule! $x))
+             (= (do_rule_plus $y) (+ $y 2))
+             !(do_rule_plus 1)", Results),
+    assertion(Results = [['Error', instantiation_error, _], 3]).
+
+test(a_pattern_removal_refreshes_the_declarations_it_removes) :-
+    program("(: do_decl_pat (-> Atom Atom))
+             (= (do_decl_pat $x) $x)
+             (= (do_decl_patcall) (do_decl_pat (+ 1 2)))
+             !(do_decl_patcall)
+             !(remove-atom &self (: $f (-> Atom Atom)))
+             !(do_decl_patcall)", Results),
+    assertion(Results == [[+, 1, 2], true, 3]).
+
 test(an_added_translator_rule_reaches_a_caller_compiled_before_it) :-
     program("(= (do_rule_expand $x) (quote (+ $x 1)))
              (= (do_rule_caller) (do_rule_expand 7))
@@ -631,5 +655,117 @@ test(an_added_translator_rule_reaches_a_caller_compiled_before_it) :-
              !(remove-translator-rule! do_rule_expand)
              !(do_rule_caller)",Results),
     assertion(Results==[[+,7,1],true,8,true,[+,7,1]]).
+
+
+test(open_tags_are_data_in_the_loader_and_in_add_atom) :-
+    program("($tag (do_open_tag_loaded) 7) !(do_open_tag_loaded)", Loaded),
+    assertion(Loaded == [[do_open_tag_loaded]]),
+    user:'add-atom'('&self', [Tag, [do_open_tag_added], 7], true),
+    assertion(var(Tag)),
+    assertion(\+ user:fun(do_open_tag_added)),
+    user:'add-atom'('&self', [=, [do_open_tag_added], 9], true),
+    user:'remove-atom'('&self', [RemoveTag, [do_open_tag_added], 9], true),
+    assertion(var(RemoveTag)),
+    program("!(do_open_tag_added)", Removed),
+    assertion(Removed == [[do_open_tag_added]]).
+
+test(a_rule_for_a_generated_head_refreshes_stored_code) :-
+    program("(= (do_generated_caller) (unique (superpose (a b a))))", _),
+    findall(X, user:do_generated_caller(X), Before),
+    assertion(Before == [a,b]),
+    setup_call_cleanup(
+        assertz(user:collapse(_, [quote,[rewritten]]), Ref),
+        setup_call_cleanup(
+            user:'add-translator-rule!'(collapse, true),
+            ( program("(= (do_generated_fresh) (unique (superpose (a b a))))", _),
+              findall(X, user:do_generated_caller(X), Stored),
+              findall(X, user:do_generated_fresh(X), Fresh),
+              assertion(Fresh \== []),
+              assertion(Fresh \== Before),
+              assertion(Stored == Fresh) ),
+            user:'remove-translator-rule!'(collapse, true)),
+        erase(Ref)).
+
+test(reflection_reads_the_same_literal_declarations_as_compilation) :-
+    program("(= (do_reflect_id $x) $x)
+             !(add-atom &self ($tag do_reflect_id (-> String Number)))
+             !(add-atom &self (: $target Number))
+             !(get-type do_reflect_id)
+             !(get-type do_reflect_undeclared)
+             !(do_reflect_id \"x\")
+             (: (do_reflect_wrap $x) (Wrap $x))", Results),
+    assertion(Results == [true,true,'%Undefined%','%Undefined%',"x"]),
+    assertion(user:'get-type'([do_reflect_wrap, value], ['Wrap', value])).
+
+test(a_rejected_declaration_leaves_no_space_row) :-
+    Type = ['Number', ->, 'Number'],
+    catch(user:'add-atom'('&self', [:, do_bad_infix_type, Type], true), Error, true),
+    assertion(nonvar(Error)),
+    assertion(Error = error(infix_arrow_syntax(do_bad_infix_type, Type), typecheck)),
+    assertion(\+ user:declared_row(do_bad_infix_type, _)).
+
+test(a_removal_that_finds_no_equation_keeps_the_function) :-
+    program("(= (do_no_match_kept) 10)", _),
+    user:'new-space'(Empty),
+    user:'remove-atom'(Empty, [=, [do_no_match_kept], 10], false),
+    program("!(do_no_match_kept)", Results),
+    assertion(Results == [10]).
+
+test(memoization_keeps_equations_in_their_source_space) :-
+    program("!(import! &self (library lib_memo))", _),
+    user:'new-space'(Source),
+    Equation = [=, [do_located_memo, X], X],
+    user:'add-atom'(Source, Equation, true),
+    program("!(memoize do_located_memo) !(do_located_memo 4)", Results),
+    assertion(Results == [true,4]),
+    assertion(user:match(Source, Equation, yes, yes)),
+    assertion(\+ user:match('&self', Equation, yes, yes)).
+
+test(a_value_declaration_leaves_a_rules_arguments_evaluated) :-
+    program("(: do_rule_value_decl Symbol)
+             (= (do_rule_value_decl $x) (quote (+ $x 1)))
+             !(add-translator-rule! do_rule_value_decl)
+             !(do_rule_value_decl 5)", Results),
+    assertion(Results == [true,6]).
+
+test(a_rule_uses_only_declarations_applicable_at_its_arity) :-
+    program("(: do_rule_two_arities (-> Atom Atom))
+             (= (do_rule_two_arities $x) (quote $x))
+             (= (do_rule_two_arities $x $y) (quote (+ $x $y)))
+             !(add-translator-rule! do_rule_two_arities)
+             !(do_rule_two_arities 3 4)", Results),
+    assertion(Results == [true,7]).
+test(a_dynamic_callee_change_refreshes_stored_rule_expansions) :-
+    program("(= (do_dynamic_rule_helper) 1)
+             (= (do_dynamic_rule $fn) (let $v (reduce ($fn)) (quote $v)))
+             !(add-translator-rule! do_dynamic_rule)
+             (= (do_dynamic_rule_caller) (do_dynamic_rule do_dynamic_rule_helper))
+             !(do_dynamic_rule_caller)
+             !(add-atom &self (= (do_dynamic_rule_helper) 99))
+             !(remove-atom &self (= (do_dynamic_rule_helper) 1))
+             !(do_dynamic_rule_caller)
+             !(do_dynamic_rule do_dynamic_rule_helper)", Results),
+    assertion(Results == [true,1,true,true,99,99]).
+
+test(rule_expansion_refresh_respects_data_edits_and_rollback) :-
+    program("(do_expansion_row old)
+             (= (do_expansion_macro)
+                (let $v (match &self (do_expansion_row $x) $x) (quote $v)))
+             !(add-translator-rule! do_expansion_macro)
+             (= (do_expansion_caller) (do_expansion_macro))
+             !(do_expansion_caller)", Before),
+    assertion(Before == [true,old]),
+    user:program_generation(Generation),
+    program("!(remove-atom &self (do_expansion_row old))
+             !(add-atom &self (do_expansion_row new))
+             !(remove-atom &self ($tag do_expansion_missing 42))
+             !(collapse (transaction
+                 (let $_ (add-atom &self (= (do_expansion_aborted) 1)) (empty))))
+             !(do_expansion_caller)", Unchanged),
+    assertion(Unchanged == [true,true,false,[],old]),
+    assertion(user:program_generation(Generation)),
+    program("!(add-atom &self (= (do_expansion_committed) 1))
+             !(do_expansion_caller)", After),
+    assertion(After == [true,new]).
 
 :- end_tests(definition_order).

@@ -809,13 +809,7 @@ cache_call(Fun, AVs, Out) :-
     -> true
     ; throw(error(domain_error(function_symbol, Fun), 'memoize!/2'))
     ),
-    findall(Term,
-        (translated_from(_, Term), Term = [=, [Fun|_], _]),
-        RawTerms),
-    sort(RawTerms, Terms),
-    forall(member(Term, Terms), 'remove-atom'('&self', Term, _)),
-    enable_memoization(Fun),
-    forall(member(Term, Terms), 'add-atom'('&self', Term, _)).
+    update_memo_dispatch(Fun, enable_memoization(Fun)).
 
 'memoize'(Fun, CallArity, true) :-
     ( atom(Fun), fun(Fun)
@@ -826,13 +820,9 @@ cache_call(Fun, AVs, Out) :-
     -> true
     ; throw(error(domain_error(nonneg_integer, CallArity), 'memoize!/3'))
     ),
-    findall(Term,
-        ( translated_from(_, Term),
-          Term = [=, [Fun|Args], _],
-          length(Args, CallArity)
-        ),
-        RawTerms),
-    sort(RawTerms, Terms),
-    forall(member(Term, Terms), 'remove-atom'('&self', Term, _)),
-    enable_memoization(Fun, CallArity),
-    forall(member(Term, Terms), 'add-atom'('&self', Term, _)).
+    update_memo_dispatch(Fun, enable_memoization(Fun, CallArity)).
+
+%Update callers when memo dispatch changes. The source equations stay in their spaces.
+update_memo_dispatch(Fun, Enable) :-
+    with_mutex(petta_definitions, with_definition_update(
+        ( call(Enable), mark_program_change, refresh_users(Fun, []), cache_invalidate_locked(Fun) ))).

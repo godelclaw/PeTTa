@@ -18,8 +18,12 @@ add_sexp(Space, TermIn) :-
         instantiation_error(TermIn)
     ; is_list(TermIn), TermIn = [Rel|Args] ->
         Term =.. [Space, Rel | Args],
-        assertz(Term),
-        maybe_cache_type_decl(Space, [Rel|Args])
+        ( Space == '&self', Rel == (:), Args = [Name, Type]
+          -> ( atom(Name)
+               -> with_mutex(petta_definitions, with_definition_update(
+                      ( assertz(Term), mark_program_change, cache_named_type_decl(Name, Type) ) ))
+               ; assertz(Term), maybe_cache_type_decl(Space, TermIn) )
+        ; assertz(Term) )
     ;
         must_be(atom, Space),
         assertz(space_primitive(Space, TermIn))
@@ -33,12 +37,41 @@ remove_sexp(Space, TermIn, Removed) :-
         instantiation_error(TermIn)
     ; is_list(TermIn), TermIn = [Rel|Args] ->
         Term =.. [Space, Rel | Args],
-        retract_reporting(Term, Removed),
-        maybe_uncache_type_decl(Space, [Rel|Args])
+        remove_expression(Space, Term, Removed)
     ;
         must_be(atom, Space),
         retract_reporting(space_primitive(Space, TermIn), Removed)
     ).
+
+remove_expression(Space, Term, Removed) :-
+    ( Space == '&self', functor(Term, _, 3), arg(1, Term, Tag), ( var(Tag) ; Tag == (:) )
+      -> with_mutex(petta_definitions, with_definition_update(
+          ( removed_declarations(Term, Declarations),
+            retract_reporting(Term, Removed),
+            ( Removed == true, Declarations \== []
+              -> mark_program_change,
+                 forall(member(Decl, Declarations), maybe_uncache_type_decl(Space, Decl))
+            ; true ) ) ))
+    ; retract_reporting(Term, Removed) ).
+
+%Inspect the stored tag and target before applying the caller's unification.
+declared_row(Target, Type) :-
+    current_predicate('&self'/3),
+    copy_term_nat(Target-Type, IndexTarget-IndexType),
+    clause('&self'(':', IndexTarget, IndexType), true, Ref),
+    literal_declaration(Ref, StoredTarget, StoredType),
+    Target-Type = StoredTarget-StoredType.
+
+literal_declaration(Ref, Target, Type) :-
+    clause('&self'(Colon, Target, Type), true, Ref), Colon == (:), nonvar(Target).
+
+%The literal declarations (: Name Type) among the rows a removal matches, read by
+%reference so that the pattern's variables stay unbound:
+removed_declarations(Term, Declarations) :-
+    findall([:, Name, Type],
+            ( copy_term(Term, Copy), clause(Copy, true, Ref),
+              literal_declaration(Ref, Name, Type), atom(Name) ),
+            Declarations).
 
 %The first retract decides the report atomically, so of several threads removing
 %the same row exactly one is told true. Pattern variables stay unbound.
@@ -50,7 +83,8 @@ retract_reporting(Term, Removed) :-
 'add-atom'(_, Term, _) :- var(Term), !, instantiation_error(Term).
 
 %Publish a function and all refreshed dependents together, or roll back.
-'add-atom'(Space, Term, true) :- Term = [=,[FAtom|W],_], atom(FAtom), !,
+'add-atom'(Space, Term, true) :- equation_form(Term, FAtom, W), !,
+    must_be(list, W),
     with_mutex(petta_definitions,
         with_definition_update(runtime_add_function_tx(Space, Term, FAtom, W))).
 
@@ -75,62 +109,82 @@ runtime_add_function_tx(Space, Term, FAtom, W) :-
     invalidate_specializations(FAtom),
     maybe_print_compiled_clause("added function", Term, Clause).
 
-%%A removal with an unknown function name must not erase program rows:
-'remove-atom'(_, Term, _) :- Term = [=,[F|_],_], var(F), !, instantiation_error(F).
+%An open tag may match equations. Require a known name when it can do so.
+'remove-atom'(_, Term, _) :-
+    equation_pattern(Term, Head, _),
+    ( var(Head) -> Bad = Head ; Head = [Bad|_], var(Bad) ), !,
+    instantiation_error(Bad).
 
-%%Remove a function atom:
 'remove-atom'(Space, Term, Removed) :-
-    Term = [=,[F|Args],Body], atom(F), !,
+    equation_pattern(Term, Head, Body), nonvar(Head), Head = [F|_], atom(F), !,
     with_mutex(petta_definitions, with_definition_update(
-        ( remove_sexp(Space, Term, Removed),
-          remember_function_metas(F),
-          ( atom(F), nb_current(F, Prev) -> true ; Prev = [] ),
-          (   select(Meta, Prev, Rest),
-              Meta = fun_meta(Args0, Body0, _),
-              Args0 =@= Args,
-              Body0 =@= Body
-              -> ( Rest == [] -> nb_delete(F)
-                               ; nb_setval(F, Rest) ) ; true ),
-          findall(Ref-A,
-                  ( translated_from(Ref, Term),
-                    ( equation_arity(F, A, Ref) -> true
-                    ; clause(H, _, Ref), functor(H, F, A) ) ),
-                  Refs),
-          forall(member(Ref-A, Refs),
-                 ( forget_compiled_dependencies(Ref),
-                   forget_translation(Ref),
-                   ignore(catch(erase(Ref), _, fail)),
-                   no_equations_answer(F, A) )),
-          sync_function_arities(F),
-          invalidate_specializations(F),
-          length(Args, N),
-          ( \+ ( equation_arity(F, RemA, _), RemA is N + 1 )
-            -> retractall(det_bound_proviso(F, N, _, _)),
-               forall(( inferred_fn_type(F, InfATs, InfOT), length(InfATs, N) ),
-                      retractall(inferred_fn_type(F, InfATs, InfOT)))
-          ; true ),
-          % Callable classification is part of the unified call contract.
-          % sync_function_arities/1 drops the last fun/1 marker before
-          % rebuilding callers so they see data syntax, not a stale call.
-          notify_mutation(clause_changed(F/N, runtime)),
-          refresh_users(F, []),
-          forall(metta_on_function_changed(F), true),
-          ( fun(F)
-            -> true
-            ; forall(metta_on_function_removed(F), true) ) ))).
+        ( Equation = [=, Head, Body],
+          ( matches_equation(Space, Equation)
+            -> remove_sexp(Space, Term, Removed),
+               ( Removed == true -> retire_equations(Equation) ; true )
+          ; typed_space_runtime_value_ok(Space, Term), remove_sexp(Space, Term, Removed) ) ))).
 
-%Remove all same atoms:
 'remove-atom'(Space, Term, Removed) :-
     typed_space_runtime_value_ok(Space, Term),
     remove_sexp(Space, Term, Removed).
 
+equation_pattern(Term, Head, Body) :-
+    is_list(Term), Term = [Tag, Head, Body], ( Tag == (=) ; var(Tag) ).
+
+equation_form(Term, F, Args) :-
+    is_list(Term), Term = [Tag, Head, _], Tag == (=),
+    nonvar(Head), Head = [F|Args], atom(F).
+
+matches_equation(Space, Equation) :-
+    copy_term(Equation, Pattern), Probe =.. [Space|Pattern],
+    clause(Probe, true, Ref),
+    clause(Stored, true, Ref), Stored =.. [Space|Row], equation_form(Row, _, _), !.
+
+retire_equations(Equation) :-
+    Equation = [=, [F|Args], Body],
+    remember_function_metas(F),
+    ( atom(F), nb_current(F, Prev) -> true ; Prev = [] ),
+    (   select(Meta, Prev, Rest),
+        Meta = fun_meta(Args0, Body0, _),
+        Args0 =@= Args,
+        Body0 =@= Body
+        -> ( Rest == [] -> nb_delete(F)
+                         ; nb_setval(F, Rest) ) ; true ),
+    findall(Ref-A,
+            ( translated_from(Ref, Equation),
+              ( equation_arity(F, A, Ref) -> true
+              ; clause(H, _, Ref), functor(H, F, A) ) ),
+            Refs),
+    forall(member(Ref-A, Refs),
+           ( forget_compiled_dependencies(Ref),
+             forget_translation(Ref),
+             ignore(catch(erase(Ref), _, fail)),
+             no_equations_answer(F, A) )),
+    sync_function_arities(F),
+    invalidate_specializations(F),
+    length(Args, N),
+    ( \+ ( equation_arity(F, RemA, _), RemA is N + 1 )
+      -> retractall(det_bound_proviso(F, N, _, _)),
+         forall(( inferred_fn_type(F, InfATs, InfOT), length(InfATs, N) ),
+                retractall(inferred_fn_type(F, InfATs, InfOT)))
+    ; true ),
+    % Callable classification is part of the unified call contract.
+    % sync_function_arities/1 drops the last fun/1 marker before
+    % rebuilding callers so they see data syntax, not a stale call.
+    notify_mutation(clause_changed(F/N, runtime)),
+    refresh_users(F, []),
+    forall(metta_on_function_changed(F), true),
+    ( fun(F)
+      -> true
+      ; forall(metta_on_function_removed(F), true) ).
+
 %Updates whose row the translator proved against the space's declared schema
 %(typed_space_update_goal/4). A function atom keeps its own clause.
-'add-atom-proven'(Space, Term, true) :- ( var(Term) -> true ; Term = [=,_,_] ), !,
+'add-atom-proven'(Space, Term, true) :- ( var(Term) ; is_list(Term), Term = [Tag,_,_], Tag == (=) ), !,
                                         'add-atom'(Space, Term, true).
 'add-atom-proven'(Space, Term, true) :- add_sexp(Space, Term).
 
-'remove-atom-proven'(Space, Term, Removed) :- Term = [=,_,_], !,
+'remove-atom-proven'(Space, Term, Removed) :- equation_pattern(Term, _, _), !,
                                               'remove-atom'(Space, Term, Removed).
 'remove-atom-proven'(Space, Term, Removed) :- remove_sexp(Space, Term, Removed).
 
@@ -156,24 +210,17 @@ space_missing(error(existence_error(procedure, Space/Arity), _), Term) :-
     dynamic(Space/Arity),
     fail.
 
-%A conjunctive match reads all its patterns in the state of the space at the call,
-%which needs db_snapshot_scope/2 (SWI-Prolog of godelclaw/swipl-devel, branch main-fixed).
-%Without it, loading stops with the exception petta_requires/1. A directive that raises
-%error(_, _) is reported and loading goes on; this exception ends the load instead, so the
-%command line exits with status 1 and a program that embeds PeTTa can catch it.
-:- multifile prolog:message//1.
-prolog:message(petta_requires(db_snapshot_scope/2)) -->
-    [ 'PeTTa needs SWI-Prolog with db_snapshot_scope/2 (godelclaw/swipl-devel, branch main-fixed)' ].
-:- predicate_property(db_snapshot_scope(_, _), defined)
-   -> true
-    ; throw(petta_requires(db_snapshot_scope/2)).
-
-%Match for conjunctive pattern
+%A conjunctive match reads each pattern when it is reached: a lookup that is already
+%running keeps the rows it started with, and a later one sees the space as it is then.
 match(_, LComma, OutPattern, Result) :- LComma == [','], !,
                                         Result = OutPattern.
-match(Space, [Comma|Patterns], OutPattern, Result) :- Comma == ',', !,
-                                                      db_snapshot_scope(Snapshot, match_conjuncts(Patterns, Snapshot, Space, OutPattern)),
-                                                      Result = OutPattern.
+match(Space, [Comma|[Head|Tail]], OutPattern, Result) :- Comma == ',', !,
+                                                         ( var(Head) -> 'get-atoms'(Space, Head)
+                                                         ; is_list(Head), Head = [_|_] -> append([Space], Head, List), Term =.. List,
+                                                                                          space_call(Term)
+                                                         ; must_be(atom, Space), space_primitive(Space, Head) ),
+                                                         \+ cyclic_term(OutPattern),
+                                                         match(Space, [','|Tail], OutPattern, Result).
 
 % When the pattern list itself is a variable -> enumerate all atoms
 match(Space, PatternVar, OutPattern, Result) :- var(PatternVar), !,
@@ -199,16 +246,3 @@ match(Space, Pattern, OutPattern, Result) :-
                                functor(Head, Space, Arity),
                                clause(Head, true),
                                Head =.. [Space | Pattern].
-
-%The conjuncts of a pattern, each read from the space as it was at the call:
-match_conjuncts([], _, _, _).
-match_conjuncts([Head|Tail], Snapshot, Space, OutPattern) :- ( var(Head) -> get_atoms_at(Snapshot, Space, Head)
-                                                             ; is_list(Head), Head = [_|_] -> append([Space], Head, List), Term =.. List,
-                                                                                              db_snapshot_call(Snapshot, Term)
-                                                             ; must_be(atom, Space), db_snapshot_call(Snapshot, space_primitive(Space, Head)) ),
-                                                             \+ cyclic_term(OutPattern),
-                                                             match_conjuncts(Tail, Snapshot, Space, OutPattern).
-
-get_atoms_at(Snapshot, Space, Pattern) :- db_snapshot_call(Snapshot, space_primitive(Space, Pattern)).
-get_atoms_at(Snapshot, Space, Pattern) :- current_predicate(Space/Arity), functor(Head, Space, Arity),
-                                          db_snapshot_clause(Snapshot, Head, true), Head =.. [Space | Pattern].

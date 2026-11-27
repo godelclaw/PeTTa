@@ -119,7 +119,7 @@ precache_pending_bodies(File, ParsedForms) :-
 
 %First pass to convert MeTTa to Prolog Terms without mutating registrations:
 parse_form(form(S, L), parsed(T, S, L, Term)) :- sread(S, Term),
-                                                 ( Term = [=, [F|_], _], atom(F) -> T=function ; T=expression ).
+                                                 ( equation_form(Term, _, _) -> T=function ; T=expression ).
 parse_form(runnable(S, L), parsed(runnable, S, L, Term)) :- sread(S, Term).
 
 %Report where a static type/determinism error was raised before rethrowing it,

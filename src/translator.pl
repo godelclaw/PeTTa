@@ -6,20 +6,35 @@
 :- dynamic no_equations_clause/3.
 :- dynamic native_function/1.
 :- dynamic native_arity/2.
+:- dynamic program_generation/1.
 :- thread_local translation_recording_active/0.
 
+program_generation(0).
 
 %A failed publication restores clauses, analysis records and function metadata.
 %The latter lives in nb_setval, outside Prolog's database transaction. Journal
 %only functions actually touched; nested updates also save their parent's view.
 with_definition_update(Goal) :-
     ( nb_current(petta_definition_metas, Parent) -> true ; Parent = none ),
-    Box = metas(Parent, []),
+    Box = metas(Parent, [], false),
     setup_call_cleanup(nb_linkval(petta_definition_metas, Box),
-        catch(( transaction(Goal) -> true ; restore_definition_metas(Box), fail ),
+        catch(( transaction((Goal, refresh_rule_expansions(Box)))
+                -> true ; restore_definition_metas(Box), fail ),
               Error, (restore_definition_metas(Box), throw(Error))),
         ( Parent == none -> nb_delete(petta_definition_metas)
         ; nb_linkval(petta_definition_metas, Parent) )).
+
+%Rule execution can look up a callee dynamically. Advance the generation for
+%an edit and refresh once the update's ordinary dependencies have settled.
+mark_program_change :-
+    ( translation_decision('$program', generation, _)
+      -> nb_getval(petta_definition_metas, Box),
+         retract(program_generation(Old)), New is Old + 1,
+         assertz(program_generation(New)), nb_setarg(3, Box, true)
+    ; true ).
+
+refresh_rule_expansions(Box) :-
+    ( arg(3, Box, true) -> refresh_users('$program', []) ; true ).
 
 remember_function_metas(F) :-
     ( nb_current(petta_definition_metas, Box) -> remember_function_metas(Box, F) ; true ).
@@ -360,25 +375,29 @@ note_typed_call_use(Fun, CallN) :-
     ( atom(Fun) -> record_current_use(Fun, call(CallN)) ; true ).
 note_typed_call_use(_, _).
 
+note_unexpanded_rule(F, Args) :-
+    ( translation_recording_active, atom(F), is_list(Args)
+      -> length(Args, N), remember_translation_use(F, rule_at(N), ordinary)
+    ; true ).
+
+note_rule_expansion :-
+    ( translation_recording_active
+      -> program_generation(Generation), remember_translation_use('$program', generation, Generation)
+    ; true ).
+
 record_current_use(F, Use) :-
+    translation_key(F, Use, Key),
+    remember_translation_use(F, Use, Key).
+
+remember_translation_use(F, Use, Key) :-
     nb_getval(petta_translation_uses, Box),
     arg(1, Box, Old),
-    translation_key(F, Use, Key),
     nb_setarg(1, Box, [use(F, Use, Key)|Old]).
 
 self_function_types(F, Types) :-
-    findall(decl(N, Scheme, Effect),
-            fn_decl(F, N, Scheme, Effect, _, _),
-            FnDecls0),
-    maplist(copy_term_nat, FnDecls0, FnDecls1),
-    maplist([D]>>numbervars(D, 0, _, [singletons(true)]), FnDecls1),
-    findall(raw(T0),
-            ( catch(match('&self', [':', F, T], T, T), _, fail),
-              copy_term_nat(T, T0),
-              numbervars(T0, 0, _, [singletons(true)]) ),
-            RawDecls),
-    append(FnDecls1, RawDecls, All0),
-    sort(All0, Types).
+    findall(decl(N, Scheme, Effect), fn_decl(F, N, Scheme, Effect, _, _), Functions),
+    findall(value(Type), declared_value_type(F, Type), Values),
+    append(Functions, Values, Types).
 
 call_memo_mode(F, N, Memo) :-
     length(Args, N),
@@ -387,11 +406,21 @@ call_memo_mode(F, N, Memo) :-
       -> Memo = direct
     ; Memo = memo ).
 
+% A translator rule rewrites an application of N arguments only while it has
+% code at that arity; otherwise the application is translated as usual.
+rule_expands(F, N) :- atom(F), translator_rule(F), A is N + 1,
+                      \+ no_equations_clause(F, A, _),
+                      ( equation_arity(F, A, _) ; native_arity(F, A)
+                      ; current_predicate(F/A), \+ ( current_op(_, _, F), A =< 2 ) ), !.
+
+translation_key(F, rule_at(N), Key) :-
+    ( rule_expands(F, N) -> Key = expansion ; Key = ordinary ).
+
 translation_key(F, data, Key) :- ( translator_rule(F) -> Key = translator_rule ; fun(F) -> Key = function ; Key = data ).
 translation_key(F, pattern, Key) :-
     ( fun(F) -> findall(A, callable_arity(F, A), As), sort(As, Key) ; Key = data ).
 translation_key(F, call(N), Key) :-
-    ( translator_rule(F) ->
+    ( rule_expands(F, N) ->
         self_function_types(F, Types),
         Key = rule(Types)
     ; \+ fun(F) ->
@@ -410,6 +439,8 @@ translation_key(F, call(N), Key) :-
           call_memo_mode(F, TargetN, TargetMemo),
           eta_mode(F, Mode), Key = partial(More, TargetMemo, Types, Mode) ) ) ).
 
+translation_use_valid('$program', generation, Generation) :- !,
+    program_generation(Generation).
 translation_use_valid(F, Use, Key) :-
     translation_key(F, Use, Now),
     ( Now =@= Key -> true
@@ -454,16 +485,18 @@ register_file_provisional_signatures(compile_functions, Forms, compile_functions
           sort(Fs0, Functions) ))).
 
 refresh_file_provisional_signatures(space_only) :- !.
+refresh_file_provisional_signatures(compile_functions(_, [])) :- !.
 refresh_file_provisional_signatures(compile_functions(_, Functions)) :-
     with_mutex(petta_definitions,
-        with_definition_update(forall(member(F, Functions), refresh_users(F, [])))).
+        with_definition_update(
+            ( mark_program_change, forall(member(F, Functions), refresh_users(F, [])) ))).
 
 finish_file_signatures(space_only) :- !.
 finish_file_signatures(compile_functions(Owner, _)) :-
     with_mutex(petta_definitions, with_definition_update(
         ( findall(F-A, pending_signature(F, A, Owner), Pairs0),
           ( Pairs0 == [] -> true
-          ; sort(Pairs0, Pairs),
+          ; mark_program_change, sort(Pairs0, Pairs),
             retractall(pending_signature(_, _, Owner)),
             forall(member(F-A, Pairs),
                    ( ( \+ native_arity(F, A),
@@ -936,7 +969,9 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
         safe_rewrite_streamops([H0|T0],[H|T]),
         translate_expr(H, none, GsH, HV),
         %--- Translator rules ---:
-        ( nonvar(HV), translator_rule(HV) -> note_translation_use(HV, data), length(T, NHook),
+        ( atom(HV), translator_rule(HV), is_list(T), length(T, NHook), rule_expands(HV, NHook)
+          -> RuleObserved = true, note_translation_use(HV, call(NHook)),
+                                             note_rule_expansion,
                                              ( once(fn_decl_arity(HV, NHook, ArgTypes, _))
                                                -> translate_args_by_type(T, ArgTypes, GsT, T1)
                                                 ; translate_args(T, GsT, T1) ),
@@ -1326,7 +1361,7 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
           append(Inner, [Goal], Goals)
         %--- Automatic 'smart' dispatch, translator deciding when to create a predicate call, data list, or dynamic dispatch: ---
         %Known function or closure => type-directed call:
-        ; ( atom(HV), fun(HV) -> Fun = HV, Bound = []
+        ; ( atom(HV), fun(HV) -> Fun = HV, Bound = [], RuleObserved = true
           ; compound(HV), HV = partial(Fun, Bound) )
           -> translate_typed_call(Fun, Bound, T, GsH, Goals, Out)
         %Literals (numbers, strings, etc.), known non-function atom => data:
@@ -1362,7 +1397,8 @@ translate_expr([H0|T0], Expectation, Goals, Out) :-
           ; var(HV), known_singleton(HV, K), nonfunction_type(K)
             -> Out = [HV|AVs],
                Goals = Inner
-          ; append(Inner, [reduce([HV|AVs], Out)], Goals) ) ).
+          ; append(Inner, [reduce([HV|AVs], Out)], Goals) ) ),
+        ( var(RuleObserved) -> note_unexpanded_rule(HV, T) ; true ).
 
 %Values of these types can never dispatch as functions in reduce/2:
 nonfunction_type(K) :- nonvar(K), ( primitive_type(K)
